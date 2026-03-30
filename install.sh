@@ -36,25 +36,34 @@ echo ""
 # Step 1: Check/install Node.js
 # ============================================================================
 
+NEED_NODE=false
+
 if command -v node &>/dev/null; then
     NODE_VERSION=$(node -v | sed 's/v//')
     NODE_MAJOR=$(echo "$NODE_VERSION" | cut -d. -f1)
     if [ "$NODE_MAJOR" -ge 18 ]; then
         log "Node.js v${NODE_VERSION} found (>= 18 required)"
     else
-        warn "Node.js v${NODE_VERSION} is too old (need >= 18). Installing..."
-        curl -fsSL https://deb.nodesource.com/setup_20.x | $SUDO -E bash - >/dev/null 2>&1
-        $SUDO apt-get install -y nodejs >/dev/null 2>&1
-        log "Node.js $(node -v) installed"
+        warn "Node.js v${NODE_VERSION} is too old (need >= 18)."
+        NEED_NODE=true
     fi
 else
-    info "Node.js not found. Installing Node.js 20.x..."
+    NEED_NODE=true
+fi
+
+if ! command -v npm &>/dev/null; then
+    warn "npm not found."
+    NEED_NODE=true
+fi
+
+if [ "$NEED_NODE" = true ]; then
+    info "Installing Node.js 20.x with npm from NodeSource..."
     if ! command -v curl &>/dev/null; then
         $SUDO apt-get update -qq && $SUDO apt-get install -y -qq curl >/dev/null 2>&1
     fi
     curl -fsSL https://deb.nodesource.com/setup_20.x | $SUDO -E bash - >/dev/null 2>&1
     $SUDO apt-get install -y nodejs >/dev/null 2>&1
-    log "Node.js $(node -v) installed"
+    log "Node.js $(node -v) + npm $(npm -v) installed"
 fi
 
 # ============================================================================
