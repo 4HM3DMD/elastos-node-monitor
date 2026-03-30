@@ -21,6 +21,11 @@ warn() { echo -e "${YELLOW}[!]${NC} $1"; }
 err()  { echo -e "${RED}[✗]${NC} $1"; exit 1; }
 info() { echo -e "${CYAN}[i]${NC} $1"; }
 
+SUDO=""
+if [ "$(id -u)" -ne 0 ]; then
+    SUDO="sudo"
+fi
+
 echo ""
 echo -e "${BOLD}╔══════════════════════════════════════════════════╗${NC}"
 echo -e "${BOLD}║       Elastos Supernode Monitor — Installer      ║${NC}"
@@ -38,17 +43,17 @@ if command -v node &>/dev/null; then
         log "Node.js v${NODE_VERSION} found (>= 18 required)"
     else
         warn "Node.js v${NODE_VERSION} is too old (need >= 18). Installing..."
-        curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash - >/dev/null 2>&1
-        sudo apt-get install -y nodejs >/dev/null 2>&1
+        curl -fsSL https://deb.nodesource.com/setup_20.x | $SUDO -E bash - >/dev/null 2>&1
+        $SUDO apt-get install -y nodejs >/dev/null 2>&1
         log "Node.js $(node -v) installed"
     fi
 else
     info "Node.js not found. Installing Node.js 20.x..."
     if ! command -v curl &>/dev/null; then
-        sudo apt-get update -qq && sudo apt-get install -y -qq curl >/dev/null 2>&1
+        $SUDO apt-get update -qq && $SUDO apt-get install -y -qq curl >/dev/null 2>&1
     fi
-    curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash - >/dev/null 2>&1
-    sudo apt-get install -y nodejs >/dev/null 2>&1
+    curl -fsSL https://deb.nodesource.com/setup_20.x | $SUDO -E bash - >/dev/null 2>&1
+    $SUDO apt-get install -y nodejs >/dev/null 2>&1
     log "Node.js $(node -v) installed"
 fi
 
@@ -56,10 +61,10 @@ fi
 # Step 2: Install npm dependencies
 # ============================================================================
 
-info "Installing dependencies..."
+info "Installing dependencies (express + dotenv)..."
 cd "$MONITOR_DIR"
-npm install --production --silent 2>/dev/null
-log "Dependencies installed (express + dotenv)"
+npm install --omit=dev
+log "Dependencies installed"
 
 # ============================================================================
 # Step 3: Auto-detect server specs
@@ -139,7 +144,7 @@ log "Configuration written to .env"
 
 NODE_BIN=$(which node)
 
-sudo tee /etc/systemd/system/${SERVICE_NAME}.service > /dev/null <<EOF
+$SUDO tee /etc/systemd/system/${SERVICE_NAME}.service > /dev/null <<EOF
 [Unit]
 Description=Elastos Supernode Monitor
 After=network.target
@@ -159,9 +164,9 @@ Environment=NODE_ENV=production
 WantedBy=multi-user.target
 EOF
 
-sudo systemctl daemon-reload
-sudo systemctl enable ${SERVICE_NAME} >/dev/null 2>&1
-sudo systemctl restart ${SERVICE_NAME}
+$SUDO systemctl daemon-reload
+$SUDO systemctl enable ${SERVICE_NAME} >/dev/null 2>&1
+$SUDO systemctl restart ${SERVICE_NAME}
 log "Systemd service created and started"
 
 # Wait for startup

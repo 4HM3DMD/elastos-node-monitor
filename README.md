@@ -4,7 +4,7 @@ A lightweight dashboard that shows you exactly how much of your server your Elas
 
 **Tracks**: ELA, DID, ESC, ESC-Oracle, EID, EID-Oracle, Arbiter, Carrier Bootstrap
 
-**Zero native dependencies** — installs in under 30 seconds, never fails due to missing compilers.
+**Zero native dependencies** — never fails due to missing compilers.
 
 ---
 
