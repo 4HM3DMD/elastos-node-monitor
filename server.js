@@ -773,6 +773,120 @@ app.get('/api/specs', (req, res) => {
   res.json(SPECS);
 });
 
+app.get('/api/export', (req, res) => {
+  const ranges = {
+    '1h': 60 * 60 * 1000,
+    '24h': 24 * 60 * 60 * 1000,
+    '7d': 7 * 24 * 60 * 60 * 1000,
+    '30d': 30 * 24 * 60 * 60 * 1000,
+  };
+  const rangeKey = req.query.range || '24h';
+  const rangeMs = ranges[rangeKey] || ranges['24h'];
+  const format = req.query.format || 'json';
+  const history = readHistory(rangeMs);
+
+  const hostname = os.hostname();
+  const now = new Date();
+
+  const current = latestSnapshot || {};
+  const chains = current.chains || [];
+  const runningCount = chains.filter(c => c.status === 'running').length;
+
+  let cpuValues = [], ramValues = [], diskValues = [];
+  const chainPeaks = {};
+  for (const snap of history) {
+    cpuValues.push(snap.cpu.percent);
+    ramValues.push(snap.memory.usedGB);
+    if (snap.disk) diskValues.push(snap.disk.usedGB);
+    for (const c of (snap.chains || [])) {
+      if (!chainPeaks[c.id]) chainPeaks[c.id] = { peakCpu: 0, peakCpuRaw: 0, peakRamMB: 0, name: c.name };
+      if (c.cpu > chainPeaks[c.id].peakCpu) chainPeaks[c.id].peakCpu = c.cpu;
+      if ((c.cpuRaw || 0) > chainPeaks[c.id].peakCpuRaw) chainPeaks[c.id].peakCpuRaw = c.cpuRaw || 0;
+      if (c.ramMB > chainPeaks[c.id].peakRamMB) chainPeaks[c.id].peakRamMB = c.ramMB;
+    }
+  }
+
+  const avg = arr => arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : 0;
+  const peak = arr => arr.length ? Math.max(...arr) : 0;
+
+  const report = {
+    exportedAt: now.toISOString(),
+    hostname,
+    range: rangeKey,
+    dataPoints: history.length,
+    specs: SPECS,
+    system: {
+      uptimeDays: current.uptime ? +(current.uptime.systemSec / 86400).toFixed(1) : 0,
+      cpu: {
+        currentPct: current.cpu ? current.cpu.percent : 0,
+        avgPct: +avg(cpuValues).toFixed(2),
+        peakPct: +peak(cpuValues).toFixed(2),
+        loadAvg: current.cpu ? current.cpu.loadAvg : [],
+      },
+      ram: {
+        currentGB: current.memory ? current.memory.usedGB : 0,
+        avgGB: +avg(ramValues).toFixed(2),
+        peakGB: +peak(ramValues).toFixed(2),
+        totalGB: SPECS.ramGB,
+        cachedGB: current.memory ? current.memory.cachedGB : 0,
+      },
+      disk: {
+        currentGB: current.disk ? current.disk.usedGB : 0,
+        totalGB: SPECS.diskGB,
+        percentUsed: current.disk ? current.disk.percent : 0,
+      },
+    },
+    chains: chains.map(c => ({
+      id: c.id,
+      name: c.name,
+      status: c.status,
+      cpu: { currentPct: c.cpu, currentRaw: c.cpuRaw || 0, peakPct: chainPeaks[c.id] ? chainPeaks[c.id].peakCpu : 0, peakRaw: chainPeaks[c.id] ? chainPeaks[c.id].peakCpuRaw : 0 },
+      ramMB: c.ramMB,
+      peakRamMB: chainPeaks[c.id] ? chainPeaks[c.id].peakRamMB : 0,
+      diskGB: c.diskGB || 0,
+      threads: c.threads || 0,
+      uptimeDays: c.uptimeSec ? +(c.uptimeSec / 86400).toFixed(1) : 0,
+    })),
+    totals: {
+      chainsRunning: runningCount,
+      chainsTotal: chains.length,
+      chainsCpuPct: current.attribution ? current.attribution.chainsCpuPct : 0,
+      chainsRamGB: current.attribution ? current.attribution.chainsRamGB : 0,
+      chainsDiskGB: +chains.reduce((s, c) => s + (c.diskGB || 0), 0).toFixed(2),
+    },
+  };
+
+  if (format === 'csv') {
+    const lines = [];
+    lines.push('# Elastos Node Monitor Export');
+    lines.push(`# Hostname: ${hostname}`);
+    lines.push(`# Exported: ${now.toISOString()}`);
+    lines.push(`# Range: ${rangeKey} (${history.length} data points)`);
+    lines.push(`# Specs: ${SPECS.cpuCores} cores, ${SPECS.ramGB} GB RAM, ${SPECS.diskGB} GB Disk`);
+    lines.push('');
+    lines.push('## System Summary');
+    lines.push('metric,current,average,peak');
+    lines.push(`CPU %,${report.system.cpu.currentPct},${report.system.cpu.avgPct},${report.system.cpu.peakPct}`);
+    lines.push(`RAM GB,${report.system.ram.currentGB},${report.system.ram.avgGB},${report.system.ram.peakGB}`);
+    lines.push(`Disk GB,${report.system.disk.currentGB},,`);
+    lines.push('');
+    lines.push('## Per-Chain');
+    lines.push('chain,status,cpu_pct,cpu_peak_pct,ram_mb,ram_peak_mb,disk_gb,threads,uptime_days');
+    for (const c of report.chains) {
+      lines.push(`${c.id},${c.status},${c.cpu.currentPct},${c.cpu.peakPct},${c.ramMB},${c.peakRamMB},${c.diskGB},${c.threads},${c.uptimeDays}`);
+    }
+    const csvBody = lines.join('\n');
+    const filename = `elastos-monitor-${hostname}-${rangeKey}-${now.toISOString().slice(0, 10)}.csv`;
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    return res.send(csvBody);
+  }
+
+  const filename = `elastos-monitor-${hostname}-${rangeKey}-${now.toISOString().slice(0, 10)}.json`;
+  res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+  res.json(report);
+});
+
 app.get('/api/diag', (req, res) => {
   const result = {
     platform: os.platform(),

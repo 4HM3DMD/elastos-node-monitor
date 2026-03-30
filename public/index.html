@@ -235,6 +235,24 @@
 
   </main>
 
+    <!-- Export -->
+    <div class="card p-6">
+      <h3 class="text-slate-400 text-sm font-medium mb-4 uppercase tracking-wider">Export Data for Server Comparison</h3>
+      <p class="text-sm text-slate-400 mb-4">Download a snapshot of this server's specs, resource usage, and per-chain metrics. Use the same export on different servers to compare them side by side.</p>
+      <div class="flex flex-wrap gap-3 items-center">
+        <select id="exportRange" class="bg-slate-800 border border-slate-600 rounded-lg text-white text-sm px-3 py-2">
+          <option value="1h">Last 1 Hour</option>
+          <option value="24h" selected>Last 24 Hours</option>
+          <option value="7d">Last 7 Days</option>
+          <option value="30d">Last 30 Days</option>
+        </select>
+        <button onclick="exportData('json')" class="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium rounded-lg transition">Download JSON</button>
+        <button onclick="exportData('csv')" class="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white text-sm font-medium rounded-lg transition">Download CSV</button>
+      </div>
+    </div>
+
+  </main>
+
   <footer class="border-t border-slate-700 px-6 py-4 mt-8">
     <div class="max-w-7xl mx-auto text-center text-sm text-slate-500">
       Elastos Node Monitor &middot; Collecting every 3s &middot; Retaining 30 days
@@ -713,6 +731,13 @@ document.querySelectorAll('.range-btn').forEach(btn => {
     fetchHistory();
   });
 });
+
+// Export
+function exportData(format) {
+  const range = document.getElementById('exportRange').value;
+  const url = apiUrl(`/api/export?range=${range}&format=${format}`);
+  window.open(url, '_blank');
+}
 
 // Init
 async function init() {
