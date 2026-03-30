@@ -13,7 +13,7 @@ A lightweight dashboard that shows you exactly how much of your server your Elas
 SSH into your supernode server, then:
 
 ```bash
-cd /opt && sudo git clone <YOUR_REPO_URL> elastos-node-monitor && cd elastos-node-monitor && bash install.sh
+cd /opt && sudo git clone https://github.com/4HM3DMD/elastos-node-monitor.git && cd elastos-node-monitor && bash install.sh
 ```
 
 Or if you already have the files on the server:
@@ -50,7 +50,7 @@ Or if you have git on the server:
 
 ```bash
 cd /opt
-git clone <YOUR_REPO_URL> elastos-node-monitor
+git clone https://github.com/4HM3DMD/elastos-node-monitor.git
 ```
 
 ### Step 3: Run the installer
