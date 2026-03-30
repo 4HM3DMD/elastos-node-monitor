@@ -267,12 +267,49 @@ const CHAIN_DEFS = [
   { id: 'carrier',    name: 'Carrier Bootstrap',  matchComm: 'carrier' },
 ];
 
+// Per-process CPU tracking via /proc/$PID/stat deltas.
+// ps pcpu is a lifetime average (useless for long-running daemons).
+// This tracks real-time CPU like top/htop does.
+let prevProcCpu = {}; // { pid: { utime, stime, wallMs } }
+let CLK_TCK = 100;
+try { CLK_TCK = parseInt(execSync('getconf CLK_TCK', { encoding: 'utf8' }).trim(), 10) || 100; } catch {}
+
+function readProcCpuTime(pid) {
+  try {
+    const stat = fs.readFileSync(`/proc/${pid}/stat`, 'utf8');
+    // Fields: pid (comm) state ppid ... field14=utime field15=stime
+    const parts = stat.match(/\)(.*)$/)[1].trim().split(/\s+/);
+    const utime = parseInt(parts[11], 10) || 0; // field 14 (0-indexed from after comm: index 11)
+    const stime = parseInt(parts[12], 10) || 0; // field 15
+    return { utime, stime, wallMs: Date.now() };
+  } catch {
+    return null;
+  }
+}
+
+function calcProcCpuPercent(pid) {
+  const curr = readProcCpuTime(pid);
+  if (!curr) return 0;
+
+  const prev = prevProcCpu[pid];
+  prevProcCpu[pid] = curr;
+
+  if (!prev) return 0;
+
+  const dtSec = (curr.wallMs - prev.wallMs) / 1000;
+  if (dtSec < 0.5) return 0;
+
+  const deltaTicks = (curr.utime - prev.utime) + (curr.stime - prev.stime);
+  const cpuPct = (deltaTicks / CLK_TCK) / dtSec * 100;
+  return Math.round(cpuPct * 10) / 10;
+}
+
 function getElastosProcesses() {
   const results = [];
 
   let psOut = '';
   try {
-    psOut = execSync('ps -eo pid,pcpu,rss,comm,args --no-headers', {
+    psOut = execSync('ps -eo pid,rss,comm,args --no-headers', {
       encoding: 'utf8',
       timeout: 5000,
     });
@@ -282,14 +319,13 @@ function getElastosProcesses() {
 
   const processes = [];
   for (const line of psOut.trim().split('\n')) {
-    const m = line.trim().match(/^(\d+)\s+([\d.]+)\s+(\d+)\s+(\S+)\s+(.*)$/);
+    const m = line.trim().match(/^(\d+)\s+(\d+)\s+(\S+)\s+(.*)$/);
     if (!m) continue;
     processes.push({
       pid: parseInt(m[1], 10),
-      cpu: parseFloat(m[2]) || 0,
-      rssKB: parseInt(m[3], 10) || 0,
-      comm: m[4],
-      args: m[5],
+      rssKB: parseInt(m[2], 10) || 0,
+      comm: m[3],
+      args: m[4],
     });
   }
 
@@ -312,7 +348,11 @@ function getElastosProcesses() {
 
       if (isMatch) {
         matched.add(proc.pid);
-        // Read VmRSS from /proc for accuracy (ps rss can underreport for mmap-heavy processes)
+
+        // Real-time CPU from /proc/$PID/stat deltas (not ps lifetime average)
+        const cpu = IS_LINUX ? calcProcCpuPercent(proc.pid) : 0;
+
+        // VmRSS from /proc for accuracy (ps rss can underreport for mmap-heavy processes)
         let ramMB = Math.round(proc.rssKB / 1024 * 10) / 10;
         try {
           const status = fs.readFileSync(`/proc/${proc.pid}/status`, 'utf8');
@@ -326,7 +366,7 @@ function getElastosProcesses() {
           id: def.id,
           name: def.name,
           pid: proc.pid,
-          cpu: proc.cpu,
+          cpu,
           ramMB,
           status: 'running',
         });
@@ -346,6 +386,12 @@ function getElastosProcesses() {
     for (const r of results) {
       r.diskGB = diskCache[r.id] || 0;
     }
+  }
+
+  // Clean up stale PID entries from prevProcCpu
+  const activePids = new Set(results.filter(r => r.pid).map(r => r.pid));
+  for (const pid of Object.keys(prevProcCpu)) {
+    if (!activePids.has(parseInt(pid, 10))) delete prevProcCpu[pid];
   }
 
   return results;
@@ -576,6 +622,29 @@ app.get('/api/specs', (req, res) => {
 
 getCpuUsage();
 if (IS_LINUX) readNetDev();
+
+// Prime per-process CPU baselines so first snapshot has real deltas
+if (IS_LINUX) {
+  try {
+    const psOut = execSync('ps -eo pid,rss,comm,args --no-headers', { encoding: 'utf8', timeout: 5000 });
+    for (const line of psOut.trim().split('\n')) {
+      const m = line.trim().match(/^(\d+)\s+(\d+)\s+(\S+)\s+(.*)$/);
+      if (!m) continue;
+      const pid = parseInt(m[1], 10);
+      const comm = m[3];
+      const args = m[4];
+      for (const def of CHAIN_DEFS) {
+        if ((def.matchComm && comm === def.matchComm) ||
+            (def.matchArgs && args.includes(def.matchArgs) && (comm === 'node' || comm === 'MainThread'))) {
+          readProcCpuTime(pid);
+          prevProcCpu[pid] = readProcCpuTime(pid) || prevProcCpu[pid];
+          break;
+        }
+      }
+    }
+    console.log('[cpu] Primed per-process CPU baselines for', Object.keys(prevProcCpu).length, 'chain processes');
+  } catch {}
+}
 
 setTimeout(() => {
   console.log('[collector] First snapshot...');

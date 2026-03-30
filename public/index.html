@@ -108,18 +108,26 @@
     </div>
 
     <!-- Section 3: Per-Chain Breakdown -->
-    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
-      <!-- Chain Bar Chart -->
-      <div class="card p-6">
-        <h3 class="text-slate-400 text-sm font-medium mb-4 uppercase tracking-wider">Who Is Eating What?</h3>
-        <div style="height:320px;">
-          <canvas id="chainChart"></canvas>
+    <div class="space-y-6">
+      <!-- Charts row -->
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <div class="card p-6">
+          <h3 class="text-slate-400 text-sm font-medium mb-4 uppercase tracking-wider">RAM per Chain (GB)</h3>
+          <div style="height:420px;">
+            <canvas id="ramBarChart"></canvas>
+          </div>
+        </div>
+        <div class="card p-6">
+          <h3 class="text-slate-400 text-sm font-medium mb-4 uppercase tracking-wider">Disk per Chain (GB)</h3>
+          <div style="height:420px;">
+            <canvas id="diskBarChart"></canvas>
+          </div>
         </div>
       </div>
 
       <!-- Chain Table -->
       <div class="card p-6">
-        <h3 class="text-slate-400 text-sm font-medium mb-4 uppercase tracking-wider">Chain Status</h3>
+        <h3 class="text-slate-400 text-sm font-medium mb-4 uppercase tracking-wider">All Chains — Detailed Status</h3>
         <div class="overflow-x-auto">
           <table class="w-full text-sm">
             <thead>
@@ -279,30 +287,43 @@ function updateGauge(chart, pct) {
 }
 
 // -------------------------------------------------------------------------
-// Chain breakdown chart
+// Chain breakdown charts (separate for RAM and Disk)
 // -------------------------------------------------------------------------
-const chainChart = new Chart(document.getElementById('chainChart'), {
-  type: 'bar',
-  data: {
-    labels: [],
-    datasets: [
-      { label: 'CPU %', data: [], backgroundColor: [], borderRadius: 4, barPercentage: 0.6 },
-      { label: 'RAM (MB)', data: [], backgroundColor: [], borderRadius: 4, barPercentage: 0.6 },
-    ]
-  },
-  options: {
-    indexAxis: 'y',
-    responsive: true,
-    maintainAspectRatio: false,
-    scales: {
-      x: { grid: { color: '#1e293b' } },
-      y: { grid: { display: false } },
+function createBarChart(canvasId, label, unit) {
+  return new Chart(document.getElementById(canvasId), {
+    type: 'bar',
+    data: {
+      labels: [],
+      datasets: [{
+        label: label,
+        data: [],
+        backgroundColor: [],
+        borderRadius: 4,
+        barPercentage: 0.7,
+      }]
     },
-    plugins: {
-      legend: { position: 'top', labels: { boxWidth: 12, padding: 16 } },
-    },
-  }
-});
+    options: {
+      indexAxis: 'y',
+      responsive: true,
+      maintainAspectRatio: false,
+      scales: {
+        x: {
+          grid: { color: '#1e293b' },
+          beginAtZero: true,
+          ticks: { callback: (v) => v + ' ' + unit },
+        },
+        y: { grid: { display: false } },
+      },
+      plugins: {
+        legend: { display: false },
+        tooltip: { callbacks: { label: (ctx) => `${ctx.parsed.x.toFixed(1)} ${unit}` } },
+      },
+    }
+  });
+}
+
+const ramBarChart = createBarChart('ramBarChart', 'RAM', 'GB');
+const diskBarChart = createBarChart('diskBarChart', 'Disk', 'GB');
 
 // -------------------------------------------------------------------------
 // Historical line charts
@@ -443,18 +464,22 @@ function fmtDisk(gb) {
 function updateChainBreakdown(chains) {
   if (!chains) return;
 
+  // RAM chart: sorted by RAM, always in GB
+  const byRam = [...chains].filter(c => c.ramMB > 0).sort((a, b) => a.ramMB - b.ramMB);
+  ramBarChart.data.labels = byRam.map(c => c.name);
+  ramBarChart.data.datasets[0].data = byRam.map(c => +(c.ramMB / 1024).toFixed(2));
+  ramBarChart.data.datasets[0].backgroundColor = byRam.map(c => CHAIN_COLORS[c.id] || '#64748b');
+  ramBarChart.update('none');
+
+  // Disk chart: sorted by disk, always in GB
+  const byDisk = [...chains].filter(c => (c.diskGB || 0) > 0).sort((a, b) => (a.diskGB || 0) - (b.diskGB || 0));
+  diskBarChart.data.labels = byDisk.map(c => c.name);
+  diskBarChart.data.datasets[0].data = byDisk.map(c => +(c.diskGB || 0).toFixed(1));
+  diskBarChart.data.datasets[0].backgroundColor = byDisk.map(c => CHAIN_COLORS[c.id] || '#64748b');
+  diskBarChart.update('none');
+
+  // Table: sorted by RAM descending (biggest consumer first)
   const sorted = [...chains].sort((a, b) => b.ramMB - a.ramMB);
-
-  // Chart
-  chainChart.data.labels = sorted.map(c => c.name);
-  chainChart.data.datasets[0].data = sorted.map(c => c.cpu);
-  chainChart.data.datasets[0].backgroundColor = sorted.map(c => CHAIN_COLORS[c.id] || '#64748b');
-  chainChart.data.datasets[1].data = sorted.map(c => c.ramMB >= 1024 ? +(c.ramMB / 1024).toFixed(1) : c.ramMB);
-  chainChart.data.datasets[1].label = 'RAM (GB)';
-  chainChart.data.datasets[1].backgroundColor = sorted.map(c => (CHAIN_COLORS[c.id] || '#64748b') + '99');
-  chainChart.update('none');
-
-  // Table
   const totalRamMB = sorted.reduce((s, c) => s + c.ramMB, 0);
   const totalDiskGB = sorted.reduce((s, c) => s + (c.diskGB || 0), 0);
   const totalCpu = sorted.reduce((s, c) => s + c.cpu, 0);
@@ -655,9 +680,10 @@ function updateVerdictDetail(history) {
     ${verdictMsg}
   `;
 
-  // Savings estimate
+  // Savings estimate (use a stored function ref to avoid stacking listeners)
   const costInput = document.getElementById('monthlyCost');
   const savingsEl = document.getElementById('savingsEstimate');
+  if (window._calcSavingsHandler) costInput.removeEventListener('input', window._calcSavingsHandler);
   const calcSavings = () => {
     const cost = parseFloat(costInput.value);
     if (!cost) { savingsEl.textContent = ''; return; }
@@ -673,6 +699,7 @@ function updateVerdictDetail(history) {
       savingsEl.innerHTML = '<span class="text-green-400">Minimal savings possible — current specs are reasonable.</span>';
     }
   };
+  window._calcSavingsHandler = calcSavings;
   costInput.addEventListener('input', calcSavings);
   calcSavings();
 }
