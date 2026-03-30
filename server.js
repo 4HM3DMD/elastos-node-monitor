@@ -283,29 +283,18 @@ let prevProcIO = {};
 let CLK_TCK = 100;
 try { CLK_TCK = parseInt(execSync('getconf CLK_TCK', { encoding: 'utf8' }).trim(), 10) || 100; } catch {}
 
-let _procStatWarnLogged = new Set();
-
 function readProcCpuTime(pid) {
   try {
     const stat = fs.readFileSync(`/proc/${pid}/stat`, 'utf8');
-    const m = stat.match(/\)(.*)$/);
-    if (!m) {
-      if (!_procStatWarnLogged.has(pid)) {
-        console.warn(`[proc] /proc/${pid}/stat: unexpected format (no closing paren)`);
-        _procStatWarnLogged.add(pid);
-      }
-      return null;
-    }
-    const parts = m[1].trim().split(/\s+/);
-    const utime = parseInt(parts[11], 10) || 0;
-    const stime = parseInt(parts[12], 10) || 0;
-    const starttime = parseInt(parts[19], 10) || 0;
+    const parenIdx = stat.lastIndexOf(')');
+    if (parenIdx < 0) return null;
+    const fields = stat.substring(parenIdx + 2).trim().split(/\s+/);
+    if (fields.length < 20) return null;
+    const utime = parseInt(fields[11], 10) || 0;
+    const stime = parseInt(fields[12], 10) || 0;
+    const starttime = parseInt(fields[19], 10) || 0;
     return { utime, stime, starttime, wallMs: Date.now() };
-  } catch (e) {
-    if (!_procStatWarnLogged.has(pid)) {
-      console.warn(`[proc] Failed to read /proc/${pid}/stat: ${e.code || e.message}`);
-      _procStatWarnLogged.add(pid);
-    }
+  } catch {
     return null;
   }
 }
@@ -380,11 +369,16 @@ function getProcMeta(pid) {
   let uptimeSec = 0;
   try {
     const statContent = fs.readFileSync(`/proc/${pid}/stat`, 'utf8');
-    const parts = statContent.match(/\)(.*)$/)[1].trim().split(/\s+/);
-    const starttime = parseInt(parts[19], 10) || 0;
-    const uptimeRaw = fs.readFileSync('/proc/uptime', 'utf8');
-    const systemUptime = parseFloat(uptimeRaw.split(' ')[0]);
-    uptimeSec = Math.round(Math.max(0, systemUptime - (starttime / CLK_TCK)));
+    const parenIdx = statContent.lastIndexOf(')');
+    if (parenIdx >= 0) {
+      const fields = statContent.substring(parenIdx + 2).trim().split(/\s+/);
+      if (fields.length >= 20) {
+        const starttime = parseInt(fields[19], 10) || 0;
+        const uptimeRaw = fs.readFileSync('/proc/uptime', 'utf8');
+        const systemUptime = parseFloat(uptimeRaw.split(' ')[0]);
+        uptimeSec = Math.round(Math.max(0, systemUptime - (starttime / CLK_TCK)));
+      }
+    }
   } catch {}
 
   return { uptimeSec, threads };
@@ -815,28 +809,25 @@ app.get('/api/diag', (req, res) => {
     const prevCpu = prevProcCpu[pid];
     result.prevProcCpu = prevCpu ? { utime: prevCpu.utime, stime: prevCpu.stime, wallMs: prevCpu.wallMs } : null;
 
-    // Step-by-step replica of readProcCpuTime for diagnosis
+    // Step-by-step test of fixed parsing
     const debug = {};
     try {
       const rawStat = fs.readFileSync(`/proc/${pid}/stat`, 'utf8');
       debug.rawLen = rawStat.length;
-      debug.rawFirst100 = rawStat.substring(0, 100);
       debug.hasCloseParen = rawStat.includes(')');
-      const regexMatch = rawStat.match(/\)(.*)$/);
-      debug.regexMatched = !!regexMatch;
-      if (regexMatch) {
-        debug.captureLen = regexMatch[1].length;
-        const parts = regexMatch[1].trim().split(/\s+/);
-        debug.fieldCount = parts.length;
-        debug.field11 = parts[11];
-        debug.field12 = parts[12];
-        debug.field19 = parts[19];
-        debug.utime = parseInt(parts[11], 10);
-        debug.stime = parseInt(parts[12], 10);
-        debug.utimeOrZero = parseInt(parts[11], 10) || 0;
-        debug.stimeOrZero = parseInt(parts[12], 10) || 0;
+      const parenIdx = rawStat.lastIndexOf(')');
+      debug.parenIdx = parenIdx;
+      if (parenIdx >= 0) {
+        const after = rawStat.substring(parenIdx + 2).trim();
+        const fields = after.split(/\s+/);
+        debug.fieldCount = fields.length;
+        debug.field0_state = fields[0];
+        debug.utime = parseInt(fields[11], 10);
+        debug.stime = parseInt(fields[12], 10);
+        debug.starttime = parseInt(fields[19], 10);
       }
-    } catch (e) { debug.error = e.code || e.message; debug.stack = e.stack; }
+      debug.readProcCpuTimeResult = readProcCpuTime(pid);
+    } catch (e) { debug.error = e.message; }
     result.cpuDebug = debug;
   }
 
