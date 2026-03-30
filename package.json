@@ -1,7 +1,7 @@
 {
   "name": "elastos-node-monitor",
   "version": "1.0.0",
-  "description": "Lightweight resource monitor for Elastos supernodes — see if your server is overkill",
+  "description": "Real-time resource monitoring dashboard for Elastos supernodes",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
