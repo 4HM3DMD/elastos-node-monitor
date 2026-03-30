@@ -1,0 +1,607 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Elastos Supernode Monitor</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+  <style>
+    body { background: #0f172a; color: #e2e8f0; font-family: 'Inter', system-ui, -apple-system, sans-serif; }
+    .card { background: #1e293b; border: 1px solid #334155; border-radius: 16px; }
+    .gauge-label { font-size: 2rem; font-weight: 700; }
+    .gauge-sub { font-size: 0.875rem; color: #94a3b8; }
+    .status-dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+    .status-running { background: #22c55e; box-shadow: 0 0 6px #22c55e88; }
+    .status-stopped { background: #ef4444; box-shadow: 0 0 6px #ef444488; }
+    .status-unknown { background: #eab308; box-shadow: 0 0 6px #eab30888; }
+    .range-btn { transition: all 0.2s; }
+    .range-btn.active { background: #3b82f6; color: #fff; }
+    .verdict-box { border-radius: 16px; padding: 24px; text-align: center; }
+    .verdict-overkill { background: linear-gradient(135deg, #064e3b, #065f46); border: 1px solid #10b981; }
+    .verdict-healthy { background: linear-gradient(135deg, #1e3a5f, #1e40af); border: 1px solid #3b82f6; }
+    .verdict-good { background: linear-gradient(135deg, #713f12, #92400e); border: 1px solid #f59e0b; }
+    .verdict-tight { background: linear-gradient(135deg, #7f1d1d, #991b1b); border: 1px solid #ef4444; }
+    canvas { max-height: 100%; }
+    ::-webkit-scrollbar { width: 8px; }
+    ::-webkit-scrollbar-track { background: #0f172a; }
+    ::-webkit-scrollbar-thumb { background: #334155; border-radius: 4px; }
+  </style>
+</head>
+<body class="min-h-screen">
+
+  <!-- Header -->
+  <header class="border-b border-slate-700 px-6 py-4">
+    <div class="max-w-7xl mx-auto flex items-center justify-between">
+      <div>
+        <h1 class="text-2xl font-bold text-white">Elastos Supernode Monitor</h1>
+        <p class="text-sm text-slate-400" id="lastUpdated">Connecting...</p>
+      </div>
+      <div class="text-right">
+        <div class="text-sm text-slate-400">Server Specs</div>
+        <div class="text-white font-mono text-sm" id="specsDisplay">Loading...</div>
+      </div>
+    </div>
+  </header>
+
+  <main class="max-w-7xl mx-auto px-6 py-8 space-y-8">
+
+    <!-- Section 1: Verdict Banner -->
+    <div id="verdictBanner" class="verdict-box verdict-healthy">
+      <div class="text-3xl font-bold mb-2" id="verdictTitle">Analyzing...</div>
+      <div class="text-lg opacity-80" id="verdictSubtitle">Collecting data to determine your server utilization</div>
+    </div>
+
+    <!-- Section 2: Gauges -->
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+      <!-- CPU Gauge -->
+      <div class="card p-6 flex flex-col items-center">
+        <h3 class="text-slate-400 text-sm font-medium mb-4 uppercase tracking-wider">CPU Usage</h3>
+        <div class="relative" style="width:200px;height:200px;">
+          <canvas id="cpuGauge"></canvas>
+          <div class="absolute inset-0 flex flex-col items-center justify-center">
+            <div class="gauge-label" id="cpuPercent">--</div>
+            <div class="gauge-sub" id="cpuDetail">-- of -- cores</div>
+          </div>
+        </div>
+        <div class="mt-3 text-sm text-slate-400" id="cpuLoad">Load: --</div>
+      </div>
+
+      <!-- RAM Gauge -->
+      <div class="card p-6 flex flex-col items-center">
+        <h3 class="text-slate-400 text-sm font-medium mb-4 uppercase tracking-wider">Memory Usage</h3>
+        <div class="relative" style="width:200px;height:200px;">
+          <canvas id="ramGauge"></canvas>
+          <div class="absolute inset-0 flex flex-col items-center justify-center">
+            <div class="gauge-label" id="ramPercent">--</div>
+            <div class="gauge-sub" id="ramDetail">-- / -- GB</div>
+          </div>
+        </div>
+        <div class="mt-3 text-sm text-slate-400" id="ramExtra">Cached: -- GB | Swap: --</div>
+      </div>
+
+      <!-- Disk Gauge -->
+      <div class="card p-6 flex flex-col items-center">
+        <h3 class="text-slate-400 text-sm font-medium mb-4 uppercase tracking-wider">Disk Usage</h3>
+        <div class="relative" style="width:200px;height:200px;">
+          <canvas id="diskGauge"></canvas>
+          <div class="absolute inset-0 flex flex-col items-center justify-center">
+            <div class="gauge-label" id="diskPercent">--</div>
+            <div class="gauge-sub" id="diskDetail">-- / -- GB</div>
+          </div>
+        </div>
+        <div class="mt-3 text-sm text-slate-400" id="diskExtra">Available: -- GB</div>
+      </div>
+    </div>
+
+    <!-- Section 3: Per-Chain Breakdown -->
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      <!-- Chain Bar Chart -->
+      <div class="card p-6">
+        <h3 class="text-slate-400 text-sm font-medium mb-4 uppercase tracking-wider">Who Is Eating What?</h3>
+        <div style="height:320px;">
+          <canvas id="chainChart"></canvas>
+        </div>
+      </div>
+
+      <!-- Chain Table -->
+      <div class="card p-6">
+        <h3 class="text-slate-400 text-sm font-medium mb-4 uppercase tracking-wider">Chain Status</h3>
+        <div class="overflow-x-auto">
+          <table class="w-full text-sm">
+            <thead>
+              <tr class="text-slate-400 border-b border-slate-700">
+                <th class="text-left py-2 px-3">Chain</th>
+                <th class="text-left py-2 px-3">Status</th>
+                <th class="text-right py-2 px-3">CPU %</th>
+                <th class="text-right py-2 px-3">RAM</th>
+                <th class="text-right py-2 px-3">PID</th>
+              </tr>
+            </thead>
+            <tbody id="chainTableBody">
+              <tr><td colspan="5" class="py-4 text-center text-slate-500">Loading...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- Section 4: Historical Charts -->
+    <div class="card p-6">
+      <div class="flex flex-wrap items-center justify-between mb-6">
+        <h3 class="text-slate-400 text-sm font-medium uppercase tracking-wider">Over Time</h3>
+        <div class="flex gap-2 mt-2 sm:mt-0">
+          <button class="range-btn active px-4 py-1.5 rounded-lg text-sm bg-slate-700 text-slate-300" data-range="1h">1 Hour</button>
+          <button class="range-btn px-4 py-1.5 rounded-lg text-sm bg-slate-700 text-slate-300" data-range="24h">24 Hours</button>
+          <button class="range-btn px-4 py-1.5 rounded-lg text-sm bg-slate-700 text-slate-300" data-range="7d">7 Days</button>
+          <button class="range-btn px-4 py-1.5 rounded-lg text-sm bg-slate-700 text-slate-300" data-range="30d">30 Days</button>
+        </div>
+      </div>
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <div style="height:250px;"><canvas id="cpuHistChart"></canvas></div>
+        <div style="height:250px;"><canvas id="ramHistChart"></canvas></div>
+        <div style="height:250px;"><canvas id="diskHistChart"></canvas></div>
+        <div style="height:250px;"><canvas id="netHistChart"></canvas></div>
+      </div>
+    </div>
+
+    <!-- Section 5: The Verdict Detail -->
+    <div class="card p-6" id="verdictDetail">
+      <h3 class="text-slate-400 text-sm font-medium mb-4 uppercase tracking-wider">The Verdict (Based on Collected Data)</h3>
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+        <div>
+          <h4 class="text-white font-semibold mb-3">Observed Usage</h4>
+          <div class="space-y-2 text-sm" id="verdictStats">
+            <p class="text-slate-400">Collecting data... check back in a few minutes.</p>
+          </div>
+        </div>
+        <div>
+          <h4 class="text-white font-semibold mb-3">Right-Sized Recommendation</h4>
+          <div class="space-y-2 text-sm" id="verdictRecommendation">
+            <p class="text-slate-400">Need more data to make a recommendation.</p>
+          </div>
+          <div class="mt-4 pt-4 border-t border-slate-700">
+            <label class="text-slate-400 text-sm">Monthly server cost ($):</label>
+            <input type="number" id="monthlyCost" class="mt-1 w-32 px-3 py-1.5 bg-slate-800 border border-slate-600 rounded-lg text-white text-sm" placeholder="e.g. 150">
+            <div class="mt-2 text-sm" id="savingsEstimate"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </main>
+
+  <footer class="border-t border-slate-700 px-6 py-4 mt-8">
+    <div class="max-w-7xl mx-auto text-center text-sm text-slate-500">
+      Elastos Node Monitor &middot; Collecting every 30s &middot; Retaining 30 days
+    </div>
+  </footer>
+
+<script>
+// -------------------------------------------------------------------------
+// Config
+// -------------------------------------------------------------------------
+const params = new URLSearchParams(window.location.search);
+const TOKEN = params.get('token') || '';
+const API_BASE = window.location.origin;
+
+function apiUrl(path) {
+  const sep = path.includes('?') ? '&' : '?';
+  return `${API_BASE}${path}${TOKEN ? sep + 'token=' + TOKEN : ''}`;
+}
+
+// -------------------------------------------------------------------------
+// Chart.js defaults
+// -------------------------------------------------------------------------
+Chart.defaults.color = '#94a3b8';
+Chart.defaults.borderColor = '#334155';
+Chart.defaults.font.family = "'Inter', system-ui, sans-serif";
+
+// -------------------------------------------------------------------------
+// Color helpers
+// -------------------------------------------------------------------------
+function usageColor(pct) {
+  if (pct < 40) return '#22c55e';
+  if (pct < 70) return '#f59e0b';
+  return '#ef4444';
+}
+
+function usageColorAlpha(pct, alpha) {
+  if (pct < 40) return `rgba(34,197,94,${alpha})`;
+  if (pct < 70) return `rgba(245,158,11,${alpha})`;
+  return `rgba(239,68,68,${alpha})`;
+}
+
+const CHAIN_COLORS = {
+  'ela': '#3b82f6',
+  'did': '#8b5cf6',
+  'esc': '#06b6d4',
+  'esc-oracle': '#0891b2',
+  'eid': '#10b981',
+  'eid-oracle': '#059669',
+  'arbiter': '#f59e0b',
+  'carrier': '#ef4444',
+};
+
+// -------------------------------------------------------------------------
+// Gauge charts (doughnut)
+// -------------------------------------------------------------------------
+function createGauge(canvasId) {
+  return new Chart(document.getElementById(canvasId), {
+    type: 'doughnut',
+    data: {
+      datasets: [{
+        data: [0, 100],
+        backgroundColor: ['#334155', '#1e293b'],
+        borderWidth: 0,
+        circumference: 270,
+        rotation: 225,
+      }]
+    },
+    options: {
+      cutout: '80%',
+      responsive: true,
+      maintainAspectRatio: true,
+      plugins: { legend: { display: false }, tooltip: { enabled: false } },
+      animation: { animateRotate: true, duration: 800 },
+    }
+  });
+}
+
+const cpuGauge = createGauge('cpuGauge');
+const ramGauge = createGauge('ramGauge');
+const diskGauge = createGauge('diskGauge');
+
+function updateGauge(chart, pct) {
+  const clamped = Math.max(0, Math.min(100, pct));
+  chart.data.datasets[0].data = [clamped, 100 - clamped];
+  chart.data.datasets[0].backgroundColor = [usageColor(clamped), '#1e293b'];
+  chart.update('none');
+}
+
+// -------------------------------------------------------------------------
+// Chain breakdown chart
+// -------------------------------------------------------------------------
+const chainChart = new Chart(document.getElementById('chainChart'), {
+  type: 'bar',
+  data: {
+    labels: [],
+    datasets: [
+      { label: 'CPU %', data: [], backgroundColor: [], borderRadius: 4, barPercentage: 0.6 },
+      { label: 'RAM (MB)', data: [], backgroundColor: [], borderRadius: 4, barPercentage: 0.6 },
+    ]
+  },
+  options: {
+    indexAxis: 'y',
+    responsive: true,
+    maintainAspectRatio: false,
+    scales: {
+      x: { grid: { color: '#1e293b' } },
+      y: { grid: { display: false } },
+    },
+    plugins: {
+      legend: { position: 'top', labels: { boxWidth: 12, padding: 16 } },
+    },
+  }
+});
+
+// -------------------------------------------------------------------------
+// Historical line charts
+// -------------------------------------------------------------------------
+function createHistChart(canvasId, label, unit) {
+  return new Chart(document.getElementById(canvasId), {
+    type: 'line',
+    data: {
+      labels: [],
+      datasets: [{
+        label: label,
+        data: [],
+        borderColor: '#3b82f6',
+        backgroundColor: 'rgba(59,130,246,0.1)',
+        fill: true,
+        tension: 0.3,
+        pointRadius: 0,
+        borderWidth: 2,
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { intersect: false, mode: 'index' },
+      scales: {
+        x: {
+          grid: { color: '#1e293b' },
+          ticks: { maxTicksLimit: 8, maxRotation: 0, callback: function(val) { return this.getLabelForValue(val); } },
+        },
+        y: {
+          grid: { color: '#1e293b' },
+          beginAtZero: true,
+          ticks: { callback: (v) => v + unit },
+        },
+      },
+      plugins: { legend: { display: false }, tooltip: { callbacks: { label: (ctx) => `${label}: ${ctx.parsed.y}${unit}` } } },
+    }
+  });
+}
+
+const cpuHistChart = createHistChart('cpuHistChart', 'CPU', '%');
+const ramHistChart = createHistChart('ramHistChart', 'RAM', ' GB');
+const diskHistChart = createHistChart('diskHistChart', 'Disk', ' GB');
+const netHistChart = createHistChart('netHistChart', 'Network', ' MB/s');
+netHistChart.data.datasets.push({
+  label: 'Upload',
+  data: [],
+  borderColor: '#8b5cf6',
+  backgroundColor: 'rgba(139,92,246,0.1)',
+  fill: true,
+  tension: 0.3,
+  pointRadius: 0,
+  borderWidth: 2,
+});
+netHistChart.options.plugins.legend = { display: true, labels: { boxWidth: 12, padding: 16 } };
+netHistChart.data.datasets[0].label = 'Download';
+
+// -------------------------------------------------------------------------
+// Format helpers
+// -------------------------------------------------------------------------
+function fmtTime(ts, range) {
+  const d = new Date(ts);
+  if (range === '1h' || range === '24h') {
+    return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  }
+  return d.toLocaleDateString([], { month: 'short', day: 'numeric' }) + ' ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+
+// -------------------------------------------------------------------------
+// Fetch & update current data
+// -------------------------------------------------------------------------
+let specs = { cpuCores: 0, ramGB: 0, diskGB: 0 };
+
+async function fetchSpecs() {
+  try {
+    const res = await fetch(apiUrl('/api/specs'));
+    specs = await res.json();
+    document.getElementById('specsDisplay').textContent = `${specs.cpuCores} Cores · ${specs.ramGB} GB RAM · ${specs.diskGB} GB Disk`;
+  } catch (e) { console.error('Failed to fetch specs:', e); }
+}
+
+async function fetchCurrent() {
+  try {
+    const res = await fetch(apiUrl('/api/current'));
+    const data = await res.json();
+    if (!data.ts || data.ts === 0) return;
+
+    document.getElementById('lastUpdated').textContent = 'Last updated: ' + new Date(data.ts).toLocaleTimeString();
+
+    // CPU gauge
+    updateGauge(cpuGauge, data.cpu.percent);
+    document.getElementById('cpuPercent').textContent = data.cpu.percent + '%';
+    const coresUsed = (data.cpu.percent / 100 * specs.cpuCores).toFixed(1);
+    document.getElementById('cpuDetail').textContent = `${coresUsed} of ${specs.cpuCores} cores`;
+    document.getElementById('cpuLoad').textContent = `Load: ${data.cpu.loadAvg.map(v => v.toFixed(2)).join(' / ')}`;
+
+    // RAM gauge
+    updateGauge(ramGauge, data.memory.percent);
+    document.getElementById('ramPercent').textContent = data.memory.percent + '%';
+    document.getElementById('ramDetail').textContent = `${data.memory.usedGB} / ${data.memory.totalGB} GB`;
+    document.getElementById('ramExtra').textContent = `Cached: ${data.memory.cachedGB} GB · Swap: ${data.memory.swapUsedGB}/${data.memory.swapTotalGB} GB`;
+
+    // Disk gauge
+    if (data.disk) {
+      updateGauge(diskGauge, data.disk.percent);
+      document.getElementById('diskPercent').textContent = data.disk.percent + '%';
+      document.getElementById('diskDetail').textContent = `${data.disk.usedGB} / ${data.disk.totalGB} GB`;
+      document.getElementById('diskExtra').textContent = `Available: ${data.disk.availGB} GB`;
+    }
+
+    // Chain breakdown
+    updateChainBreakdown(data.chains);
+
+    // Verdict banner
+    updateVerdictBanner(data);
+  } catch (e) { console.error('Failed to fetch current:', e); }
+}
+
+function updateChainBreakdown(chains) {
+  if (!chains) return;
+
+  const sorted = [...chains].sort((a, b) => b.ramMB - a.ramMB);
+
+  // Chart
+  chainChart.data.labels = sorted.map(c => c.name);
+  chainChart.data.datasets[0].data = sorted.map(c => c.cpu);
+  chainChart.data.datasets[0].backgroundColor = sorted.map(c => CHAIN_COLORS[c.id] || '#64748b');
+  chainChart.data.datasets[1].data = sorted.map(c => c.ramMB);
+  chainChart.data.datasets[1].backgroundColor = sorted.map(c => (CHAIN_COLORS[c.id] || '#64748b') + '99');
+  chainChart.update('none');
+
+  // Table
+  const tbody = document.getElementById('chainTableBody');
+  tbody.innerHTML = sorted.map(c => `
+    <tr class="border-b border-slate-800 hover:bg-slate-800/50">
+      <td class="py-2.5 px-3 font-medium text-white">${c.name}</td>
+      <td class="py-2.5 px-3">
+        <span class="status-dot status-${c.status}"></span>
+        <span class="ml-2 capitalize">${c.status}</span>
+      </td>
+      <td class="py-2.5 px-3 text-right font-mono">${c.cpu.toFixed(1)}%</td>
+      <td class="py-2.5 px-3 text-right font-mono">${c.ramMB.toFixed(0)} MB</td>
+      <td class="py-2.5 px-3 text-right font-mono text-slate-500">${c.pid || '—'}</td>
+    </tr>
+  `).join('');
+}
+
+function updateVerdictBanner(data) {
+  const banner = document.getElementById('verdictBanner');
+  const title = document.getElementById('verdictTitle');
+  const subtitle = document.getElementById('verdictSubtitle');
+
+  const cpuPct = data.cpu.percent;
+  const ramPct = data.memory.percent;
+  const diskPct = data.disk ? data.disk.percent : 0;
+  const maxPct = Math.max(cpuPct, ramPct);
+
+  banner.className = 'verdict-box';
+
+  if (maxPct < 30) {
+    banner.classList.add('verdict-overkill');
+    title.textContent = 'Your Server Is Massively Overprovisioned';
+    subtitle.textContent = `Peak resource: ${maxPct.toFixed(0)}% — you are paying for way more than you need.`;
+  } else if (maxPct < 60) {
+    banner.classList.add('verdict-healthy');
+    title.textContent = 'Healthy Headroom';
+    subtitle.textContent = `Peak resource: ${maxPct.toFixed(0)}% — plenty of room for spikes and growth.`;
+  } else if (maxPct < 80) {
+    banner.classList.add('verdict-good');
+    title.textContent = 'Good Utilization';
+    subtitle.textContent = `Peak resource: ${maxPct.toFixed(0)}% — well-sized for your workload.`;
+  } else {
+    banner.classList.add('verdict-tight');
+    title.textContent = 'Getting Tight — Monitor Closely';
+    subtitle.textContent = `Peak resource: ${maxPct.toFixed(0)}% — consider upgrading before you hit limits.`;
+  }
+}
+
+// -------------------------------------------------------------------------
+// Fetch & update historical data
+// -------------------------------------------------------------------------
+let currentRange = '1h';
+
+async function fetchHistory() {
+  try {
+    const res = await fetch(apiUrl(`/api/history?range=${currentRange}`));
+    const data = await res.json();
+    if (!data.length) return;
+
+    const labels = data.map(s => fmtTime(s.ts, currentRange));
+
+    // CPU history
+    cpuHistChart.data.labels = labels;
+    cpuHistChart.data.datasets[0].data = data.map(s => s.cpu.percent);
+    cpuHistChart.data.datasets[0].borderColor = usageColor(Math.max(...data.map(s => s.cpu.percent)));
+    cpuHistChart.data.datasets[0].backgroundColor = usageColorAlpha(Math.max(...data.map(s => s.cpu.percent)), 0.1);
+    cpuHistChart.update('none');
+
+    // RAM history
+    ramHistChart.data.labels = labels;
+    ramHistChart.data.datasets[0].data = data.map(s => s.memory.usedGB);
+    ramHistChart.data.datasets[0].borderColor = usageColor(Math.max(...data.map(s => s.memory.percent)));
+    ramHistChart.data.datasets[0].backgroundColor = usageColorAlpha(Math.max(...data.map(s => s.memory.percent)), 0.1);
+    ramHistChart.update('none');
+
+    // Disk history
+    diskHistChart.data.labels = labels;
+    diskHistChart.data.datasets[0].data = data.map(s => s.disk ? s.disk.usedGB : 0);
+    diskHistChart.data.datasets[0].borderColor = '#06b6d4';
+    diskHistChart.data.datasets[0].backgroundColor = 'rgba(6,182,212,0.1)';
+    diskHistChart.update('none');
+
+    // Network history
+    netHistChart.data.labels = labels;
+    netHistChart.data.datasets[0].data = data.map(s => s.network ? s.network.rxMBps : 0);
+    netHistChart.data.datasets[1].data = data.map(s => s.network ? s.network.txMBps : 0);
+    netHistChart.update('none');
+
+    // Update verdict detail
+    updateVerdictDetail(data);
+  } catch (e) { console.error('Failed to fetch history:', e); }
+}
+
+function updateVerdictDetail(history) {
+  if (history.length < 2) return;
+
+  const cpuValues = history.map(s => s.cpu.percent);
+  const ramValues = history.map(s => s.memory.usedGB);
+  const diskValues = history.map(s => s.disk ? s.disk.usedGB : 0);
+
+  const peakCpu = Math.max(...cpuValues);
+  const avgCpu = (cpuValues.reduce((a, b) => a + b, 0) / cpuValues.length);
+  const peakRamGB = Math.max(...ramValues);
+  const avgRamGB = (ramValues.reduce((a, b) => a + b, 0) / ramValues.length);
+  const currentDisk = diskValues[diskValues.length - 1];
+
+  // Disk growth rate
+  let diskGrowthPerDay = 0;
+  if (diskValues.length >= 2 && history.length >= 2) {
+    const dtMs = history[history.length - 1].ts - history[0].ts;
+    const dtDays = dtMs / (24 * 60 * 60 * 1000);
+    if (dtDays > 0.01) {
+      diskGrowthPerDay = (diskValues[diskValues.length - 1] - diskValues[0]) / dtDays;
+    }
+  }
+
+  const statsEl = document.getElementById('verdictStats');
+  statsEl.innerHTML = `
+    <div class="grid grid-cols-2 gap-x-6 gap-y-2">
+      <div class="text-slate-400">Peak CPU</div><div class="text-white font-mono">${peakCpu.toFixed(1)}% (${(peakCpu / 100 * specs.cpuCores).toFixed(1)} cores)</div>
+      <div class="text-slate-400">Avg CPU</div><div class="text-white font-mono">${avgCpu.toFixed(1)}%</div>
+      <div class="text-slate-400">Peak RAM</div><div class="text-white font-mono">${peakRamGB.toFixed(1)} GB</div>
+      <div class="text-slate-400">Avg RAM</div><div class="text-white font-mono">${avgRamGB.toFixed(1)} GB</div>
+      <div class="text-slate-400">Disk Used</div><div class="text-white font-mono">${currentDisk.toFixed(1)} GB</div>
+      <div class="text-slate-400">Disk Growth</div><div class="text-white font-mono">${diskGrowthPerDay > 0 ? diskGrowthPerDay.toFixed(2) + ' GB/day' : 'Measuring...'}</div>
+      ${diskGrowthPerDay > 0 ? `<div class="text-slate-400">Disk Full In</div><div class="text-white font-mono">${Math.round((specs.diskGB - currentDisk) / diskGrowthPerDay)} days</div>` : ''}
+    </div>
+  `;
+
+  // Recommendation
+  const recCores = Math.max(2, Math.ceil((peakCpu / 100 * specs.cpuCores) * 1.3));
+  const recRAM = Math.max(4, Math.ceil(peakRamGB * 1.3));
+  const recDisk = diskGrowthPerDay > 0 ? Math.max(100, Math.ceil((currentDisk + diskGrowthPerDay * 365) * 1.2)) : specs.diskGB;
+
+  const recEl = document.getElementById('verdictRecommendation');
+  const isOverkill = recCores < specs.cpuCores * 0.75 || recRAM < specs.ramGB * 0.75;
+
+  recEl.innerHTML = `
+    <div class="grid grid-cols-2 gap-x-6 gap-y-2">
+      <div class="text-slate-400">Recommended CPU</div>
+      <div class="text-white font-mono">${recCores} cores <span class="text-slate-500">(you have ${specs.cpuCores})</span></div>
+      <div class="text-slate-400">Recommended RAM</div>
+      <div class="text-white font-mono">${recRAM} GB <span class="text-slate-500">(you have ${specs.ramGB} GB)</span></div>
+      <div class="text-slate-400">Recommended Disk</div>
+      <div class="text-white font-mono">${recDisk} GB <span class="text-slate-500">(you have ${specs.diskGB} GB)</span></div>
+    </div>
+    ${isOverkill ? '<p class="mt-3 text-amber-400 font-medium">You could likely downgrade and save money.</p>' : '<p class="mt-3 text-green-400 font-medium">Your current specs are appropriately sized.</p>'}
+  `;
+
+  // Savings estimate
+  const costInput = document.getElementById('monthlyCost');
+  const savingsEl = document.getElementById('savingsEstimate');
+  const calcSavings = () => {
+    const cost = parseFloat(costInput.value);
+    if (!cost || !isOverkill) { savingsEl.textContent = ''; return; }
+    const utilizationRatio = Math.max(recCores / specs.cpuCores, recRAM / specs.ramGB);
+    const potentialSavings = cost * (1 - utilizationRatio);
+    savingsEl.innerHTML = `<span class="text-green-400 font-medium">Estimated savings: ~$${potentialSavings.toFixed(0)}/month</span>`;
+  };
+  costInput.addEventListener('input', calcSavings);
+  calcSavings();
+}
+
+// -------------------------------------------------------------------------
+// Range buttons
+// -------------------------------------------------------------------------
+document.querySelectorAll('.range-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.range-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    currentRange = btn.dataset.range;
+    fetchHistory();
+  });
+});
+
+// -------------------------------------------------------------------------
+// Init
+// -------------------------------------------------------------------------
+async function init() {
+  await fetchSpecs();
+  await fetchCurrent();
+  await fetchHistory();
+
+  setInterval(fetchCurrent, 30000);
+  setInterval(fetchHistory, 60000);
+}
+
+init();
+</script>
+</body>
+</html>
