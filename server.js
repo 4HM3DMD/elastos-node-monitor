@@ -242,37 +242,55 @@ function getNetwork() {
 // ---------------------------------------------------------------------------
 // Elastos process discovery
 // ---------------------------------------------------------------------------
+//
+// Matching rules derived from actual `ps -eo pid,pcpu,rss,comm,args` output
+// on a running Elastos supernode:
+//
+// Chain binaries show comm = binary name (ela, esc, eid, eco, pg, arbiter, etc.)
+// Oracle scripts show comm = "MainThread" or "node", args = "node crosschain_*.js"
+// ESC oracle is special: its script is crosschain_oracle.js (not crosschain_esc.js)
+//
+// We skip bash wrappers and rotatelogs processes.
 
 const CHAIN_DEFS = [
-  { id: 'ela',        name: 'ELA Mainchain',     bins: ['ela'],        pgrep: 'ela' },
-  { id: 'did',        name: 'DID Sidechain',     bins: ['did'],        pgrep: 'did' },
-  { id: 'esc',        name: 'ESC Sidechain',     bins: ['esc'],        pgrep: '\\./esc .*--rpc' },
-  { id: 'esc-oracle', name: 'ESC Oracle',         bins: [],             pgrep: 'crosschain_esc' },
-  { id: 'eid',        name: 'EID Sidechain',     bins: ['eid'],        pgrep: '\\./eid .*--rpc' },
-  { id: 'eid-oracle', name: 'EID Oracle',         bins: [],             pgrep: 'crosschain_eid' },
-  { id: 'eco',        name: 'ECO Sidechain',     bins: ['eco'],        pgrep: '\\./eco .*--rpc' },
-  { id: 'eco-oracle', name: 'ECO Oracle',         bins: [],             pgrep: 'crosschain_eco' },
-  { id: 'pg',         name: 'PG Sidechain',      bins: ['pg'],         pgrep: '\\./pg .*--rpc' },
-  { id: 'pg-oracle',  name: 'PG Oracle',          bins: [],             pgrep: 'crosschain_pg' },
-  { id: 'arbiter',    name: 'Arbiter',            bins: ['arbiter'],    pgrep: 'arbiter' },
-  { id: 'carrier',    name: 'Carrier Bootstrap',  bins: ['carrier'],    pgrep: 'carrier' },
+  { id: 'ela',        name: 'ELA Mainchain',     matchComm: 'ela' },
+  { id: 'did',        name: 'DID Sidechain',     matchComm: 'did' },
+  { id: 'esc',        name: 'ESC Sidechain',     matchComm: 'esc' },
+  { id: 'esc-oracle', name: 'ESC Oracle',         matchArgs: 'crosschain_oracle.js' },
+  { id: 'eid',        name: 'EID Sidechain',     matchComm: 'eid' },
+  { id: 'eid-oracle', name: 'EID Oracle',         matchArgs: 'crosschain_eid.js' },
+  { id: 'eco',        name: 'ECO Sidechain',     matchComm: 'eco' },
+  { id: 'eco-oracle', name: 'ECO Oracle',         matchArgs: 'crosschain_eco.js' },
+  { id: 'pg',         name: 'PG Sidechain',      matchComm: 'pg' },
+  { id: 'pg-oracle',  name: 'PG Oracle',          matchArgs: 'crosschain_pg.js' },
+  { id: 'arbiter',    name: 'Arbiter',            matchComm: 'arbiter' },
+  { id: 'carrier',    name: 'Carrier Bootstrap',  matchComm: 'carrier' },
 ];
 
 function getElastosProcesses() {
   const results = [];
 
-  let psLines = [];
+  let psOut = '';
   try {
-    const psOut = execSync('ps -eo pid,pcpu,rss,vsz,comm,args --no-headers', {
+    psOut = execSync('ps -eo pid,pcpu,rss,comm,args --no-headers', {
       encoding: 'utf8',
       timeout: 5000,
     });
-    psLines = psOut.trim().split('\n');
   } catch {
-    for (const def of CHAIN_DEFS) {
-      results.push({ id: def.id, name: def.name, pid: null, cpu: 0, ramMB: 0, status: 'unknown' });
-    }
-    return results;
+    return CHAIN_DEFS.map(def => ({ id: def.id, name: def.name, pid: null, cpu: 0, ramMB: 0, status: 'unknown' }));
+  }
+
+  const processes = [];
+  for (const line of psOut.trim().split('\n')) {
+    const m = line.trim().match(/^(\d+)\s+([\d.]+)\s+(\d+)\s+(\S+)\s+(.*)$/);
+    if (!m) continue;
+    processes.push({
+      pid: parseInt(m[1], 10),
+      cpu: parseFloat(m[2]) || 0,
+      rssKB: parseInt(m[3], 10) || 0,
+      comm: m[4],
+      args: m[5],
+    });
   }
 
   const matched = new Set();
@@ -280,49 +298,30 @@ function getElastosProcesses() {
   for (const def of CHAIN_DEFS) {
     let found = false;
 
-    // Method 1: use pgrep pattern (matches how node.sh finds its own processes)
-    if (def.pgrep) {
-      try {
-        const pgrepOut = execSync(`pgrep -f '${def.pgrep}' 2>/dev/null`, { encoding: 'utf8', timeout: 3000 });
-        const pids = pgrepOut.trim().split('\n').map(p => parseInt(p, 10)).filter(p => p > 0 && !matched.has(p));
-        if (pids.length > 0) {
-          const targetPid = pids[0];
-          matched.add(targetPid);
-          const psLine = psLines.find(l => {
-            const p = parseInt(l.trim().split(/\s+/)[0], 10);
-            return p === targetPid;
-          });
-          let cpu = 0, ramMB = 0;
-          if (psLine) {
-            const parts = psLine.trim().split(/\s+/);
-            cpu = parseFloat(parts[1]) || 0;
-            ramMB = Math.round((parseInt(parts[2], 10) || 0) / 1024 * 10) / 10;
-          }
-          results.push({ id: def.id, name: def.name, pid: targetPid, cpu, ramMB, status: 'running' });
-          found = true;
-        }
-      } catch { /* pgrep returns exit 1 when no match */ }
-    }
+    for (const proc of processes) {
+      if (matched.has(proc.pid)) continue;
 
-    // Method 2: fallback to binary name match from ps output
-    if (!found && def.bins.length > 0) {
-      for (const line of psLines) {
-        const parts = line.trim().split(/\s+/);
-        if (parts.length < 5) continue;
-        const pid = parseInt(parts[0], 10);
-        if (matched.has(pid)) continue;
-        const comm = parts[4].toLowerCase();
-        if (def.bins.some(b => comm === b || comm.endsWith('/' + b))) {
-          matched.add(pid);
-          results.push({
-            id: def.id, name: def.name, pid,
-            cpu: parseFloat(parts[1]) || 0,
-            ramMB: Math.round((parseInt(parts[2], 10) || 0) / 1024 * 10) / 10,
-            status: 'running',
-          });
-          found = true;
-          break;
-        }
+      let isMatch = false;
+
+      if (def.matchComm) {
+        isMatch = proc.comm === def.matchComm;
+      } else if (def.matchArgs) {
+        isMatch = proc.args.includes(def.matchArgs) &&
+                  (proc.comm === 'node' || proc.comm === 'MainThread');
+      }
+
+      if (isMatch) {
+        matched.add(proc.pid);
+        results.push({
+          id: def.id,
+          name: def.name,
+          pid: proc.pid,
+          cpu: proc.cpu,
+          ramMB: Math.round(proc.rssKB / 1024 * 10) / 10,
+          status: 'running',
+        });
+        found = true;
+        break;
       }
     }
 
