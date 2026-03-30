@@ -57,12 +57,15 @@ if ! command -v npm &>/dev/null; then
 fi
 
 if [ "$NEED_NODE" = true ]; then
-    info "Installing Node.js 20.x with npm from NodeSource..."
+    info "Installing Node.js 20.x with npm from NodeSource (this may take a minute)..."
     if ! command -v curl &>/dev/null; then
-        $SUDO apt-get update -qq && $SUDO apt-get install -y -qq curl >/dev/null 2>&1
+        info "  Installing curl..."
+        $SUDO apt-get update -qq && $SUDO apt-get install -y -qq curl
     fi
-    curl -fsSL https://deb.nodesource.com/setup_20.x | $SUDO -E bash - >/dev/null 2>&1
-    $SUDO apt-get install -y nodejs >/dev/null 2>&1
+    info "  Adding NodeSource repository..."
+    curl -fsSL https://deb.nodesource.com/setup_20.x | $SUDO -E bash -
+    info "  Installing nodejs package..."
+    $SUDO apt-get install -y nodejs
     log "Node.js $(node -v) + npm $(npm -v) installed"
 fi
 
