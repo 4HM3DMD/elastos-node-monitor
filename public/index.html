@@ -26,11 +26,12 @@
     ::-webkit-scrollbar { width: 8px; }
     ::-webkit-scrollbar-track { background: #0f172a; }
     ::-webkit-scrollbar-thumb { background: #334155; border-radius: 4px; }
+    .attr-bar { height: 20px; border-radius: 10px; overflow: hidden; display: flex; }
+    .attr-segment { height: 100%; transition: width 0.8s ease; }
   </style>
 </head>
 <body class="min-h-screen">
 
-  <!-- Header -->
   <header class="border-b border-slate-700 px-6 py-4">
     <div class="max-w-7xl mx-auto flex items-center justify-between">
       <div>
@@ -40,21 +41,21 @@
       <div class="text-right">
         <div class="text-sm text-slate-400">Server Specs</div>
         <div class="text-white font-mono text-sm" id="specsDisplay">Loading...</div>
+        <div class="text-xs text-slate-500 mt-0.5" id="uptimeDisplay"></div>
       </div>
     </div>
   </header>
 
   <main class="max-w-7xl mx-auto px-6 py-8 space-y-8">
 
-    <!-- Section 1: Verdict Banner -->
+    <!-- Verdict Banner -->
     <div id="verdictBanner" class="verdict-box verdict-healthy">
       <div class="text-3xl font-bold mb-2" id="verdictTitle">Analyzing...</div>
       <div class="text-lg opacity-80" id="verdictSubtitle">Collecting data to determine your server utilization</div>
     </div>
 
-    <!-- Section 2: Gauges -->
+    <!-- Gauges -->
     <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
-      <!-- CPU Gauge -->
       <div class="card p-6 flex flex-col items-center">
         <h3 class="text-slate-400 text-sm font-medium mb-4 uppercase tracking-wider">CPU Usage</h3>
         <div class="relative" style="width:200px;height:200px;">
@@ -71,7 +72,6 @@
         </div>
       </div>
 
-      <!-- RAM Gauge -->
       <div class="card p-6 flex flex-col items-center">
         <h3 class="text-slate-400 text-sm font-medium mb-4 uppercase tracking-wider">Memory Usage</h3>
         <div class="relative" style="width:200px;height:200px;">
@@ -89,7 +89,6 @@
         </div>
       </div>
 
-      <!-- Disk Gauge -->
       <div class="card p-6 flex flex-col items-center">
         <h3 class="text-slate-400 text-sm font-medium mb-4 uppercase tracking-wider">Disk Usage</h3>
         <div class="relative" style="width:200px;height:200px;">
@@ -107,48 +106,91 @@
       </div>
     </div>
 
-    <!-- Section 3: Per-Chain Breakdown -->
-    <div class="space-y-6">
-      <!-- Charts row -->
-      <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <div class="card p-6">
-          <h3 class="text-slate-400 text-sm font-medium mb-4 uppercase tracking-wider">RAM per Chain (GB)</h3>
-          <div style="height:420px;">
-            <canvas id="ramBarChart"></canvas>
+    <!-- Resource Attribution -->
+    <div class="card p-6" id="attrCard">
+      <h3 class="text-slate-400 text-sm font-medium mb-4 uppercase tracking-wider">Resource Attribution — Who Uses What</h3>
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+        <div>
+          <div class="flex items-center justify-between mb-2">
+            <span class="text-sm text-slate-400">CPU</span>
+            <span class="text-xs text-slate-500" id="attrCpuLabel">--</span>
+          </div>
+          <div class="attr-bar bg-slate-800">
+            <div class="attr-segment bg-blue-500" id="attrCpuChains" style="width:0%"></div>
+            <div class="attr-segment bg-amber-500" id="attrCpuOther" style="width:0%"></div>
+          </div>
+          <div class="flex gap-4 mt-2 text-xs">
+            <span class="text-blue-400">&#9632; Elastos chains: <span id="attrCpuChainsVal">--</span></span>
+            <span class="text-amber-400">&#9632; Other: <span id="attrCpuOtherVal">--</span></span>
+            <span class="text-slate-500">&#9632; Idle: <span id="attrCpuIdleVal">--</span></span>
           </div>
         </div>
-        <div class="card p-6">
-          <h3 class="text-slate-400 text-sm font-medium mb-4 uppercase tracking-wider">Disk per Chain (GB)</h3>
-          <div style="height:420px;">
-            <canvas id="diskBarChart"></canvas>
+        <div>
+          <div class="flex items-center justify-between mb-2">
+            <span class="text-sm text-slate-400">RAM</span>
+            <span class="text-xs text-slate-500" id="attrRamLabel">--</span>
           </div>
-        </div>
-      </div>
-
-      <!-- Chain Table -->
-      <div class="card p-6">
-        <h3 class="text-slate-400 text-sm font-medium mb-4 uppercase tracking-wider">All Chains — Detailed Status</h3>
-        <div class="overflow-x-auto">
-          <table class="w-full text-sm">
-            <thead>
-              <tr class="text-slate-400 border-b border-slate-700">
-                <th class="text-left py-2 px-3">Chain</th>
-                <th class="text-left py-2 px-3">Status</th>
-                <th class="text-right py-2 px-3">CPU %</th>
-                <th class="text-right py-2 px-3">RAM</th>
-                <th class="text-right py-2 px-3">Disk</th>
-                <th class="text-right py-2 px-3">PID</th>
-              </tr>
-            </thead>
-            <tbody id="chainTableBody">
-              <tr><td colspan="6" class="py-4 text-center text-slate-500">Loading...</td></tr>
-            </tbody>
-          </table>
+          <div class="attr-bar bg-slate-800">
+            <div class="attr-segment bg-blue-500" id="attrRamChains" style="width:0%"></div>
+            <div class="attr-segment bg-amber-500" id="attrRamOther" style="width:0%"></div>
+          </div>
+          <div class="flex gap-4 mt-2 text-xs">
+            <span class="text-blue-400">&#9632; Elastos chains: <span id="attrRamChainsVal">--</span></span>
+            <span class="text-amber-400">&#9632; Other + Cache: <span id="attrRamOtherVal">--</span></span>
+            <span class="text-slate-500">&#9632; Free: <span id="attrRamFreeVal">--</span></span>
+          </div>
         </div>
       </div>
     </div>
 
-    <!-- Section 4: Historical Charts -->
+    <!-- Per-Chain Charts (CPU, RAM, Disk) -->
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      <div class="card p-6">
+        <h3 class="text-slate-400 text-sm font-medium mb-4 uppercase tracking-wider">CPU per Chain (%)</h3>
+        <div style="height:360px;">
+          <canvas id="cpuBarChart"></canvas>
+        </div>
+      </div>
+      <div class="card p-6">
+        <h3 class="text-slate-400 text-sm font-medium mb-4 uppercase tracking-wider">RAM per Chain (GB)</h3>
+        <div style="height:360px;">
+          <canvas id="ramBarChart"></canvas>
+        </div>
+      </div>
+      <div class="card p-6">
+        <h3 class="text-slate-400 text-sm font-medium mb-4 uppercase tracking-wider">Disk per Chain (GB)</h3>
+        <div style="height:360px;">
+          <canvas id="diskBarChart"></canvas>
+        </div>
+      </div>
+    </div>
+
+    <!-- Chain Table -->
+    <div class="card p-6">
+      <h3 class="text-slate-400 text-sm font-medium mb-4 uppercase tracking-wider">All Chains — Detailed Status</h3>
+      <div class="overflow-x-auto">
+        <table class="w-full text-sm">
+          <thead>
+            <tr class="text-slate-400 border-b border-slate-700">
+              <th class="text-left py-2 px-2">Chain</th>
+              <th class="text-left py-2 px-2">Status</th>
+              <th class="text-right py-2 px-2">CPU</th>
+              <th class="text-right py-2 px-2">RAM</th>
+              <th class="text-right py-2 px-2">Disk</th>
+              <th class="text-right py-2 px-2">I/O</th>
+              <th class="text-right py-2 px-2">Threads</th>
+              <th class="text-right py-2 px-2">Uptime</th>
+              <th class="text-right py-2 px-2">PID</th>
+            </tr>
+          </thead>
+          <tbody id="chainTableBody">
+            <tr><td colspan="9" class="py-4 text-center text-slate-500">Loading...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Historical Charts -->
     <div class="card p-6">
       <div class="flex flex-wrap items-center justify-between mb-6">
         <h3 class="text-slate-400 text-sm font-medium uppercase tracking-wider">Over Time</h3>
@@ -167,7 +209,7 @@
       </div>
     </div>
 
-    <!-- Section 5: The Verdict Detail -->
+    <!-- Verdict Detail -->
     <div class="card p-6" id="verdictDetail">
       <h3 class="text-slate-400 text-sm font-medium mb-4 uppercase tracking-wider">The Verdict (Based on Collected Data)</h3>
       <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -200,9 +242,6 @@
   </footer>
 
 <script>
-// -------------------------------------------------------------------------
-// Config
-// -------------------------------------------------------------------------
 const params = new URLSearchParams(window.location.search);
 const TOKEN = params.get('token') || '';
 const API_BASE = window.location.origin;
@@ -216,20 +255,13 @@ function showAuthError() {
   document.getElementById('lastUpdated').textContent = 'Authentication failed';
   document.getElementById('verdictTitle').textContent = 'Unauthorized';
   document.getElementById('verdictSubtitle').textContent = 'Invalid or missing token. Use the URL printed during installation (includes ?token=...).';
-  const banner = document.getElementById('verdictBanner');
-  banner.className = 'verdict-box verdict-tight';
+  document.getElementById('verdictBanner').className = 'verdict-box verdict-tight';
 }
 
-// -------------------------------------------------------------------------
-// Chart.js defaults
-// -------------------------------------------------------------------------
 Chart.defaults.color = '#94a3b8';
 Chart.defaults.borderColor = '#334155';
 Chart.defaults.font.family = "'Inter', system-ui, sans-serif";
 
-// -------------------------------------------------------------------------
-// Color helpers
-// -------------------------------------------------------------------------
 function usageColor(pct) {
   if (pct < 40) return '#22c55e';
   if (pct < 70) return '#f59e0b';
@@ -243,38 +275,22 @@ function usageColorAlpha(pct, alpha) {
 }
 
 const CHAIN_COLORS = {
-  'ela': '#3b82f6',
-  'esc': '#06b6d4',
-  'esc-oracle': '#0891b2',
-  'eid': '#10b981',
-  'eid-oracle': '#059669',
-  'eco': '#f97316',
-  'eco-oracle': '#ea580c',
-  'pg': '#ec4899',
-  'pg-oracle': '#db2777',
+  'ela': '#3b82f6', 'esc': '#06b6d4', 'esc-oracle': '#0891b2',
+  'eid': '#10b981', 'eid-oracle': '#059669', 'eco': '#f97316',
+  'eco-oracle': '#ea580c', 'pg': '#ec4899', 'pg-oracle': '#db2777',
   'arbiter': '#f59e0b',
 };
 
-// -------------------------------------------------------------------------
-// Gauge charts (doughnut)
-// -------------------------------------------------------------------------
+// Gauges
 function createGauge(canvasId) {
   return new Chart(document.getElementById(canvasId), {
     type: 'doughnut',
     data: {
       labels: ['Used', 'Free'],
-      datasets: [{
-        data: [0, 100],
-        backgroundColor: ['#334155', 'rgba(100,116,139,0.15)'],
-        borderWidth: 0,
-        circumference: 270,
-        rotation: 225,
-      }]
+      datasets: [{ data: [0, 100], backgroundColor: ['#334155', 'rgba(100,116,139,0.15)'], borderWidth: 0, circumference: 270, rotation: 225 }]
     },
     options: {
-      cutout: '78%',
-      responsive: true,
-      maintainAspectRatio: true,
+      cutout: '78%', responsive: true, maintainAspectRatio: true,
       plugins: { legend: { display: false }, tooltip: { enabled: false } },
       animation: { animateRotate: true, duration: 800 },
     }
@@ -292,78 +308,40 @@ function updateGauge(chart, pct) {
   chart.update('none');
 }
 
-// -------------------------------------------------------------------------
-// Chain breakdown charts (separate for RAM and Disk)
-// -------------------------------------------------------------------------
-function createBarChart(canvasId, label, unit) {
+// Chain bar charts
+function createBarChart(canvasId, unit) {
   return new Chart(document.getElementById(canvasId), {
     type: 'bar',
-    data: {
-      labels: [],
-      datasets: [{
-        label: label,
-        data: [],
-        backgroundColor: [],
-        borderRadius: 4,
-        barPercentage: 0.7,
-      }]
-    },
+    data: { labels: [], datasets: [{ data: [], backgroundColor: [], borderRadius: 4, barPercentage: 0.7 }] },
     options: {
-      indexAxis: 'y',
-      responsive: true,
-      maintainAspectRatio: false,
+      indexAxis: 'y', responsive: true, maintainAspectRatio: false,
       scales: {
-        x: {
-          grid: { color: '#1e293b' },
-          beginAtZero: true,
-          ticks: { callback: (v) => v + ' ' + unit },
-        },
+        x: { grid: { color: '#1e293b' }, beginAtZero: true, ticks: { callback: (v) => v + unit } },
         y: { grid: { display: false } },
       },
       plugins: {
         legend: { display: false },
-        tooltip: { callbacks: { label: (ctx) => `${ctx.parsed.x.toFixed(1)} ${unit}` } },
+        tooltip: { callbacks: { label: (ctx) => `${ctx.parsed.x.toFixed(2)} ${unit.trim()}` } },
       },
     }
   });
 }
 
-const ramBarChart = createBarChart('ramBarChart', 'RAM', 'GB');
-const diskBarChart = createBarChart('diskBarChart', 'Disk', 'GB');
+const cpuBarChart = createBarChart('cpuBarChart', '%');
+const ramBarChart = createBarChart('ramBarChart', ' GB');
+const diskBarChart = createBarChart('diskBarChart', ' GB');
 
-// -------------------------------------------------------------------------
-// Historical line charts
-// -------------------------------------------------------------------------
+// History charts
 function createHistChart(canvasId, label, unit) {
   return new Chart(document.getElementById(canvasId), {
     type: 'line',
-    data: {
-      labels: [],
-      datasets: [{
-        label: label,
-        data: [],
-        borderColor: '#3b82f6',
-        backgroundColor: 'rgba(59,130,246,0.1)',
-        fill: true,
-        tension: 0.3,
-        pointRadius: 0,
-        borderWidth: 2,
-      }]
-    },
+    data: { labels: [], datasets: [{ label, data: [], borderColor: '#3b82f6', backgroundColor: 'rgba(59,130,246,0.1)', fill: true, tension: 0.3, pointRadius: 0, borderWidth: 2 }] },
     options: {
-      responsive: true,
-      maintainAspectRatio: false,
+      responsive: true, maintainAspectRatio: false,
       interaction: { intersect: false, mode: 'index' },
       scales: {
-        x: {
-          grid: { color: '#1e293b' },
-          ticks: { maxTicksLimit: 8, maxRotation: 0, callback: function(val) { return this.getLabelForValue(val); } },
-        },
-        y: {
-          grid: { color: '#1e293b' },
-          beginAtZero: true,
-          ticks: { callback: (v) => v + unit },
-        },
+        x: { grid: { color: '#1e293b' }, ticks: { maxTicksLimit: 8, maxRotation: 0, callback: function(val) { return this.getLabelForValue(val); } } },
+        y: { grid: { color: '#1e293b' }, beginAtZero: true, ticks: { callback: (v) => v + unit } },
       },
       plugins: { legend: { display: false }, tooltip: { callbacks: { label: (ctx) => `${label}: ${ctx.parsed.y}${unit}` } } },
     }
@@ -374,33 +352,46 @@ const cpuHistChart = createHistChart('cpuHistChart', 'CPU', '%');
 const ramHistChart = createHistChart('ramHistChart', 'RAM', ' GB');
 const diskHistChart = createHistChart('diskHistChart', 'Disk', ' GB');
 const netHistChart = createHistChart('netHistChart', 'Network', ' MB/s');
-netHistChart.data.datasets.push({
-  label: 'Upload',
-  data: [],
-  borderColor: '#8b5cf6',
-  backgroundColor: 'rgba(139,92,246,0.1)',
-  fill: true,
-  tension: 0.3,
-  pointRadius: 0,
-  borderWidth: 2,
-});
+netHistChart.data.datasets.push({ label: 'Upload', data: [], borderColor: '#8b5cf6', backgroundColor: 'rgba(139,92,246,0.1)', fill: true, tension: 0.3, pointRadius: 0, borderWidth: 2 });
 netHistChart.options.plugins.legend = { display: true, labels: { boxWidth: 12, padding: 16 } };
 netHistChart.data.datasets[0].label = 'Download';
 
-// -------------------------------------------------------------------------
-// Format helpers
-// -------------------------------------------------------------------------
+// Helpers
 function fmtTime(ts, range) {
   const d = new Date(ts);
-  if (range === '1h' || range === '24h') {
-    return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-  }
+  if (range === '1h' || range === '24h') return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   return d.toLocaleDateString([], { month: 'short', day: 'numeric' }) + ' ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 
-// -------------------------------------------------------------------------
-// Fetch & update current data
-// -------------------------------------------------------------------------
+function fmtRAM(mb) {
+  if (mb >= 1024) return (mb / 1024).toFixed(1) + ' GB';
+  return mb.toFixed(0) + ' MB';
+}
+
+function fmtDisk(gb) {
+  if (!gb || gb === 0) return '—';
+  if (gb >= 1) return gb.toFixed(1) + ' GB';
+  return (gb * 1024).toFixed(0) + ' MB';
+}
+
+function fmtUptime(sec) {
+  if (!sec || sec <= 0) return '—';
+  const d = Math.floor(sec / 86400);
+  const h = Math.floor((sec % 86400) / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  if (d > 0) return `${d}d ${h}h`;
+  if (h > 0) return `${h}h ${m}m`;
+  return `${m}m`;
+}
+
+function fmtIO(readMBps, writeMBps) {
+  if (!readMBps && !writeMBps) return '—';
+  const r = readMBps >= 1 ? readMBps.toFixed(1) : (readMBps * 1024).toFixed(0) + 'K';
+  const w = writeMBps >= 1 ? writeMBps.toFixed(1) : (writeMBps * 1024).toFixed(0) + 'K';
+  return `R:${r} W:${w}`;
+}
+
+// Data
 let specs = { cpuCores: 0, ramGB: 0, diskGB: 0 };
 
 async function fetchSpecs() {
@@ -414,14 +405,15 @@ async function fetchSpecs() {
 async function fetchCurrent() {
   try {
     const res = await fetch(apiUrl('/api/current'));
-    if (!res.ok) {
-      if (res.status === 401) showAuthError();
-      return;
-    }
+    if (!res.ok) { if (res.status === 401) showAuthError(); return; }
     const data = await res.json();
     if (!data.ts || data.ts === 0) return;
 
     document.getElementById('lastUpdated').textContent = 'Last updated: ' + new Date(data.ts).toLocaleTimeString();
+
+    if (data.uptime) {
+      document.getElementById('uptimeDisplay').textContent = 'Server uptime: ' + fmtUptime(data.uptime.systemSec);
+    }
 
     // CPU gauge
     updateGauge(cpuGauge, data.cpu.percent);
@@ -452,6 +444,9 @@ async function fetchCurrent() {
       document.getElementById('diskTotalVal').textContent = `${data.disk.totalGB} GB`;
     }
 
+    // Resource attribution
+    if (data.attribution) updateAttribution(data);
+
     // Chain breakdown
     updateChainBreakdown(data.chains);
 
@@ -460,61 +455,89 @@ async function fetchCurrent() {
   } catch (e) { console.error('Failed to fetch current:', e); }
 }
 
-function fmtRAM(mb) {
-  if (mb >= 1024) return (mb / 1024).toFixed(1) + ' GB';
-  return mb.toFixed(0) + ' MB';
-}
+function updateAttribution(data) {
+  const attr = data.attribution;
+  const cpuTotal = data.cpu.percent;
+  const idleCpu = Math.max(0, 100 - cpuTotal);
 
-function fmtDisk(gb) {
-  if (!gb || gb === 0) return '—';
-  if (gb >= 1) return gb.toFixed(1) + ' GB';
-  return (gb * 1024).toFixed(0) + ' MB';
+  document.getElementById('attrCpuChainsVal').textContent = attr.chainsCpuPct.toFixed(1) + '%';
+  document.getElementById('attrCpuOtherVal').textContent = attr.otherCpuPct.toFixed(1) + '%';
+  document.getElementById('attrCpuIdleVal').textContent = idleCpu.toFixed(0) + '%';
+  document.getElementById('attrCpuLabel').textContent = `${cpuTotal.toFixed(1)}% total utilization`;
+
+  document.getElementById('attrCpuChains').style.width = attr.chainsCpuPct + '%';
+  document.getElementById('attrCpuOther').style.width = attr.otherCpuPct + '%';
+
+  const ramTotalGB = data.memory.totalGB;
+  const chainsPct = (attr.chainsRamGB / ramTotalGB * 100);
+  const otherPct = (attr.otherRamGB / ramTotalGB * 100);
+  const freePct = Math.max(0, 100 - chainsPct - otherPct);
+
+  document.getElementById('attrRamChainsVal').textContent = attr.chainsRamGB.toFixed(1) + ' GB';
+  document.getElementById('attrRamOtherVal').textContent = attr.otherRamGB.toFixed(1) + ' GB';
+  document.getElementById('attrRamFreeVal').textContent = data.memory.freeGB.toFixed(1) + ' GB';
+  document.getElementById('attrRamLabel').textContent = `${data.memory.usedGB} / ${ramTotalGB} GB used`;
+
+  document.getElementById('attrRamChains').style.width = chainsPct + '%';
+  document.getElementById('attrRamOther').style.width = otherPct + '%';
 }
 
 function updateChainBreakdown(chains) {
   if (!chains) return;
 
-  // RAM chart: sorted by RAM, always in GB
-  const byRam = [...chains].filter(c => c.ramMB > 0).sort((a, b) => a.ramMB - b.ramMB);
+  const running = chains.filter(c => c.status === 'running');
+
+  // CPU chart: % of total system, sorted ascending
+  const byCpu = [...running].filter(c => c.cpu > 0).sort((a, b) => a.cpu - b.cpu);
+  cpuBarChart.data.labels = byCpu.map(c => c.name);
+  cpuBarChart.data.datasets[0].data = byCpu.map(c => c.cpu);
+  cpuBarChart.data.datasets[0].backgroundColor = byCpu.map(c => CHAIN_COLORS[c.id] || '#64748b');
+  cpuBarChart.update('none');
+
+  // RAM chart
+  const byRam = [...running].filter(c => c.ramMB > 0).sort((a, b) => a.ramMB - b.ramMB);
   ramBarChart.data.labels = byRam.map(c => c.name);
   ramBarChart.data.datasets[0].data = byRam.map(c => +(c.ramMB / 1024).toFixed(2));
   ramBarChart.data.datasets[0].backgroundColor = byRam.map(c => CHAIN_COLORS[c.id] || '#64748b');
   ramBarChart.update('none');
 
-  // Disk chart: sorted by disk, always in GB
-  const byDisk = [...chains].filter(c => (c.diskGB || 0) > 0).sort((a, b) => (a.diskGB || 0) - (b.diskGB || 0));
+  // Disk chart
+  const byDisk = [...running].filter(c => (c.diskGB || 0) > 0).sort((a, b) => (a.diskGB || 0) - (b.diskGB || 0));
   diskBarChart.data.labels = byDisk.map(c => c.name);
   diskBarChart.data.datasets[0].data = byDisk.map(c => +(c.diskGB || 0).toFixed(1));
   diskBarChart.data.datasets[0].backgroundColor = byDisk.map(c => CHAIN_COLORS[c.id] || '#64748b');
   diskBarChart.update('none');
 
-  // Table: sorted by RAM descending (biggest consumer first)
+  // Table
   const sorted = [...chains].sort((a, b) => b.ramMB - a.ramMB);
+  const totalCpu = sorted.reduce((s, c) => s + c.cpu, 0);
   const totalRamMB = sorted.reduce((s, c) => s + c.ramMB, 0);
   const totalDiskGB = sorted.reduce((s, c) => s + (c.diskGB || 0), 0);
-  const totalCpu = sorted.reduce((s, c) => s + c.cpu, 0);
 
   const tbody = document.getElementById('chainTableBody');
   tbody.innerHTML = sorted.map(c => `
     <tr class="border-b border-slate-800 hover:bg-slate-800/50">
-      <td class="py-2.5 px-3 font-medium text-white">${c.name}</td>
-      <td class="py-2.5 px-3">
+      <td class="py-2 px-2 font-medium text-white">${c.name}</td>
+      <td class="py-2 px-2">
         <span class="status-dot status-${c.status}"></span>
-        <span class="ml-2 capitalize">${c.status}</span>
+        <span class="ml-1.5 capitalize">${c.status}</span>
       </td>
-      <td class="py-2.5 px-3 text-right font-mono">${c.cpu.toFixed(1)}%</td>
-      <td class="py-2.5 px-3 text-right font-mono">${fmtRAM(c.ramMB)}</td>
-      <td class="py-2.5 px-3 text-right font-mono">${fmtDisk(c.diskGB)}</td>
-      <td class="py-2.5 px-3 text-right font-mono text-slate-500">${c.pid || '—'}</td>
+      <td class="py-2 px-2 text-right font-mono" title="${c.cpuRaw || 0}% of 1 core">${c.cpu.toFixed(1)}%</td>
+      <td class="py-2 px-2 text-right font-mono">${c.status === 'running' ? fmtRAM(c.ramMB) : '—'}</td>
+      <td class="py-2 px-2 text-right font-mono">${fmtDisk(c.diskGB)}</td>
+      <td class="py-2 px-2 text-right font-mono text-slate-500">${c.status === 'running' ? fmtIO(c.readMBps, c.writeMBps) : '—'}</td>
+      <td class="py-2 px-2 text-right font-mono text-slate-500">${c.threads || '—'}</td>
+      <td class="py-2 px-2 text-right font-mono text-slate-500">${fmtUptime(c.uptimeSec)}</td>
+      <td class="py-2 px-2 text-right font-mono text-slate-600">${c.pid || '—'}</td>
     </tr>
   `).join('') + `
     <tr class="border-t-2 border-slate-600 font-semibold">
-      <td class="py-2.5 px-3 text-slate-300">Total (all chains)</td>
-      <td class="py-2.5 px-3"></td>
-      <td class="py-2.5 px-3 text-right font-mono text-white">${totalCpu.toFixed(1)}%</td>
-      <td class="py-2.5 px-3 text-right font-mono text-white">${fmtRAM(totalRamMB)}</td>
-      <td class="py-2.5 px-3 text-right font-mono text-white">${totalDiskGB > 0 ? totalDiskGB.toFixed(1) + ' GB' : '—'}</td>
-      <td class="py-2.5 px-3"></td>
+      <td class="py-2 px-2 text-slate-300">Total (all chains)</td>
+      <td class="py-2 px-2"></td>
+      <td class="py-2 px-2 text-right font-mono text-white">${totalCpu.toFixed(1)}%</td>
+      <td class="py-2 px-2 text-right font-mono text-white">${fmtRAM(totalRamMB)}</td>
+      <td class="py-2 px-2 text-right font-mono text-white">${totalDiskGB > 0 ? totalDiskGB.toFixed(1) + ' GB' : '—'}</td>
+      <td class="py-2 px-2" colspan="4"></td>
     </tr>`;
 }
 
@@ -531,34 +554,28 @@ function updateVerdictBanner(data) {
   const totalChains = (data.chains || []).length;
 
   banner.className = 'verdict-box';
-
-  const cpuDesc = `CPU ${cpuPct.toFixed(0)}%`;
-  const ramDesc = `RAM ${ramPct.toFixed(0)}%`;
-  const diskDesc = `Disk ${diskPct.toFixed(0)}%`;
-  const chainDesc = `${runningChains}/${totalChains} chains running`;
+  const desc = `CPU ${cpuPct.toFixed(0)}% · RAM ${ramPct.toFixed(0)}% · Disk ${diskPct.toFixed(0)}% · ${runningChains}/${totalChains} chains`;
 
   if (maxPct < 20) {
     banner.classList.add('verdict-overkill');
     title.textContent = 'Very Low Utilization';
-    subtitle.textContent = `${cpuDesc} · ${ramDesc} · ${diskDesc} · ${chainDesc}. You have significant spare capacity, but blockchain nodes can spike during sync and consensus events.`;
+    subtitle.textContent = `${desc}. Significant spare capacity — blockchain nodes can spike during sync and consensus events.`;
   } else if (maxPct < 50) {
     banner.classList.add('verdict-healthy');
-    title.textContent = 'Healthy — Good Headroom for Blockchain Operations';
-    subtitle.textContent = `${cpuDesc} · ${ramDesc} · ${diskDesc} · ${chainDesc}. Plenty of room for chain syncs, consensus spikes, and data growth.`;
+    title.textContent = 'Healthy — Good Headroom';
+    subtitle.textContent = `${desc}. Plenty of room for chain syncs, consensus spikes, and data growth.`;
   } else if (maxPct < 75) {
     banner.classList.add('verdict-good');
     title.textContent = 'Well Utilized';
-    subtitle.textContent = `${cpuDesc} · ${ramDesc} · ${diskDesc} · ${chainDesc}. Good balance between cost and capacity.`;
+    subtitle.textContent = `${desc}. Good balance between cost and capacity.`;
   } else {
     banner.classList.add('verdict-tight');
     title.textContent = 'High Utilization — Monitor Closely';
-    subtitle.textContent = `${cpuDesc} · ${ramDesc} · ${diskDesc} · ${chainDesc}. Spikes during chain syncs or consensus could cause issues.`;
+    subtitle.textContent = `${desc}. Spikes during chain syncs or consensus could cause issues.`;
   }
 }
 
-// -------------------------------------------------------------------------
-// Fetch & update historical data
-// -------------------------------------------------------------------------
+// History
 let currentRange = '1h';
 
 async function fetchHistory() {
@@ -570,39 +587,33 @@ async function fetchHistory() {
 
     const labels = data.map(s => fmtTime(s.ts, currentRange));
 
-    // CPU history
     cpuHistChart.data.labels = labels;
     cpuHistChart.data.datasets[0].data = data.map(s => s.cpu.percent);
     cpuHistChart.data.datasets[0].borderColor = usageColor(Math.max(...data.map(s => s.cpu.percent)));
     cpuHistChart.data.datasets[0].backgroundColor = usageColorAlpha(Math.max(...data.map(s => s.cpu.percent)), 0.1);
     cpuHistChart.update('none');
 
-    // RAM history
     ramHistChart.data.labels = labels;
     ramHistChart.data.datasets[0].data = data.map(s => s.memory.usedGB);
     ramHistChart.data.datasets[0].borderColor = usageColor(Math.max(...data.map(s => s.memory.percent)));
     ramHistChart.data.datasets[0].backgroundColor = usageColorAlpha(Math.max(...data.map(s => s.memory.percent)), 0.1);
     ramHistChart.update('none');
 
-    // Disk history
     diskHistChart.data.labels = labels;
     diskHistChart.data.datasets[0].data = data.map(s => s.disk ? s.disk.usedGB : 0);
     diskHistChart.data.datasets[0].borderColor = '#06b6d4';
     diskHistChart.data.datasets[0].backgroundColor = 'rgba(6,182,212,0.1)';
     diskHistChart.update('none');
 
-    // Network history
     netHistChart.data.labels = labels;
     netHistChart.data.datasets[0].data = data.map(s => s.network ? s.network.rxMBps : 0);
     netHistChart.data.datasets[1].data = data.map(s => s.network ? s.network.txMBps : 0);
     netHistChart.update('none');
 
-    // Update verdict detail
     updateVerdictDetail(data);
   } catch (e) { console.error('Failed to fetch history:', e); }
 }
 
-// Elastos official minimums for CR Council (all chains)
 const ELASTOS_MIN = { cores: 4, ramGB: 32, diskGB: 400 };
 
 function updateVerdictDetail(history) {
@@ -613,15 +624,14 @@ function updateVerdictDetail(history) {
   const diskValues = history.map(s => s.disk ? s.disk.usedGB : 0);
 
   const peakCpu = Math.max(...cpuValues);
-  const avgCpu = (cpuValues.reduce((a, b) => a + b, 0) / cpuValues.length);
+  const avgCpu = cpuValues.reduce((a, b) => a + b, 0) / cpuValues.length;
   const peakRamGB = Math.max(...ramValues);
-  const avgRamGB = (ramValues.reduce((a, b) => a + b, 0) / ramValues.length);
+  const avgRamGB = ramValues.reduce((a, b) => a + b, 0) / ramValues.length;
   const currentDisk = diskValues[diskValues.length - 1];
 
   const latestChains = history[history.length - 1].chains || [];
   const runningCount = latestChains.filter(c => c.status === 'running').length;
 
-  // Disk growth rate
   let diskGrowthPerDay = 0;
   let diskFullDays = 0;
   if (diskValues.length >= 2 && history.length >= 2) {
@@ -635,8 +645,7 @@ function updateVerdictDetail(history) {
     }
   }
 
-  const statsEl = document.getElementById('verdictStats');
-  statsEl.innerHTML = `
+  document.getElementById('verdictStats').innerHTML = `
     <div class="grid grid-cols-2 gap-x-6 gap-y-2">
       <div class="text-slate-400">Peak CPU</div><div class="text-white font-mono">${peakCpu.toFixed(1)}% (${(peakCpu / 100 * specs.cpuCores).toFixed(1)} cores)</div>
       <div class="text-slate-400">Avg CPU</div><div class="text-white font-mono">${avgCpu.toFixed(1)}%</div>
@@ -644,15 +653,10 @@ function updateVerdictDetail(history) {
       <div class="text-slate-400">Avg RAM</div><div class="text-white font-mono">${avgRamGB.toFixed(1)} GB</div>
       <div class="text-slate-400">Chains Running</div><div class="text-white font-mono">${runningCount} of ${latestChains.length}</div>
       <div class="text-slate-400">Disk Used</div><div class="text-white font-mono">${currentDisk.toFixed(1)} GB</div>
-      <div class="text-slate-400">Disk Growth</div><div class="text-white font-mono">${diskGrowthPerDay > 0.001 ? diskGrowthPerDay.toFixed(2) + ' GB/day' : 'Measuring... (need more data)'}</div>
+      <div class="text-slate-400">Disk Growth</div><div class="text-white font-mono">${diskGrowthPerDay > 0.001 ? diskGrowthPerDay.toFixed(2) + ' GB/day' : 'Measuring...'}</div>
       ${diskFullDays > 0 ? `<div class="text-slate-400">Disk Full In</div><div class="text-white font-mono ${diskFullDays < 90 ? 'text-red-400' : diskFullDays < 365 ? 'text-amber-400' : ''}">${diskFullDays > 365 ? Math.round(diskFullDays/365) + '+ years' : diskFullDays + ' days'}</div>` : ''}
-    </div>
-  `;
+    </div>`;
 
-  // Blockchain-aware recommendation
-  // Floor: Elastos official minimums (4 cores, 32 GB, 400 GB for all chains)
-  // Headroom: 2x peak for CPU (consensus spikes), 1.5x peak for RAM (chain sync bursts)
-  // Disk: project 2 years of growth + 20% buffer
   const peakCores = peakCpu / 100 * specs.cpuCores;
   const recCores = Math.max(ELASTOS_MIN.cores, Math.ceil(peakCores * 2));
   const recRAM = Math.max(ELASTOS_MIN.ramGB, Math.ceil(peakRamGB * 1.5));
@@ -660,64 +664,45 @@ function updateVerdictDetail(history) {
     ? Math.max(ELASTOS_MIN.diskGB, Math.ceil((currentDisk + diskGrowthPerDay * 730) * 1.2))
     : Math.max(ELASTOS_MIN.diskGB, Math.ceil(currentDisk * 2));
 
-  const recEl = document.getElementById('verdictRecommendation');
-
   const cpuStatus = specs.cpuCores >= recCores ? 'text-green-400' : 'text-red-400';
   const ramStatus = specs.ramGB >= recRAM ? 'text-green-400' : 'text-red-400';
   const diskStatus = specs.diskGB >= recDisk ? 'text-green-400' : 'text-red-400';
-
   const hasExcess = specs.cpuCores > recCores * 1.5 || specs.ramGB > recRAM * 1.5;
   const isTight = specs.cpuCores < recCores || specs.ramGB < recRAM || specs.diskGB < recDisk;
 
   let verdictMsg = '';
-  if (isTight) {
-    verdictMsg = '<p class="mt-3 text-red-400 font-medium">Some specs are below recommended levels for a multi-chain blockchain node.</p>';
-  } else if (hasExcess) {
-    verdictMsg = '<p class="mt-3 text-amber-400 font-medium">You have more capacity than needed. This gives extra safety margin for chain syncs and network events, but a smaller server could work if budget is a concern.</p>';
-  } else {
-    verdictMsg = '<p class="mt-3 text-green-400 font-medium">Well-sized for a multi-chain Elastos supernode.</p>';
-  }
+  if (isTight) verdictMsg = '<p class="mt-3 text-red-400 font-medium">Some specs are below recommended levels.</p>';
+  else if (hasExcess) verdictMsg = '<p class="mt-3 text-amber-400 font-medium">Extra capacity beyond what\'s needed. Good safety margin, but a smaller server could work.</p>';
+  else verdictMsg = '<p class="mt-3 text-green-400 font-medium">Well-sized for a multi-chain Elastos supernode.</p>';
 
-  recEl.innerHTML = `
-    <p class="text-xs text-slate-500 mb-3">Based on observed usage with 2x CPU headroom (consensus spikes), 1.5x RAM headroom (sync bursts), and 2-year disk projection. Elastos minimums (${ELASTOS_MIN.cores} cores / ${ELASTOS_MIN.ramGB} GB / ${ELASTOS_MIN.diskGB} GB) enforced as floor.</p>
+  document.getElementById('verdictRecommendation').innerHTML = `
+    <p class="text-xs text-slate-500 mb-3">2x CPU headroom, 1.5x RAM headroom, 2-year disk projection. Elastos minimums (${ELASTOS_MIN.cores}c/${ELASTOS_MIN.ramGB}G/${ELASTOS_MIN.diskGB}G) as floor.</p>
     <div class="grid grid-cols-2 gap-x-6 gap-y-2">
-      <div class="text-slate-400">Recommended CPU</div>
-      <div class="font-mono"><span class="${cpuStatus}">${recCores} cores</span> <span class="text-slate-500">(you have ${specs.cpuCores})</span></div>
-      <div class="text-slate-400">Recommended RAM</div>
-      <div class="font-mono"><span class="${ramStatus}">${recRAM} GB</span> <span class="text-slate-500">(you have ${specs.ramGB} GB)</span></div>
-      <div class="text-slate-400">Recommended Disk</div>
-      <div class="font-mono"><span class="${diskStatus}">${recDisk} GB</span> <span class="text-slate-500">(you have ${specs.diskGB} GB)</span></div>
+      <div class="text-slate-400">CPU</div><div class="font-mono"><span class="${cpuStatus}">${recCores} cores</span> <span class="text-slate-500">(have ${specs.cpuCores})</span></div>
+      <div class="text-slate-400">RAM</div><div class="font-mono"><span class="${ramStatus}">${recRAM} GB</span> <span class="text-slate-500">(have ${specs.ramGB} GB)</span></div>
+      <div class="text-slate-400">Disk</div><div class="font-mono"><span class="${diskStatus}">${recDisk} GB</span> <span class="text-slate-500">(have ${specs.diskGB} GB)</span></div>
     </div>
-    ${verdictMsg}
-  `;
+    ${verdictMsg}`;
 
-  // Savings estimate (use a stored function ref to avoid stacking listeners)
   const costInput = document.getElementById('monthlyCost');
   const savingsEl = document.getElementById('savingsEstimate');
   if (window._calcSavingsHandler) costInput.removeEventListener('input', window._calcSavingsHandler);
   const calcSavings = () => {
     const cost = parseFloat(costInput.value);
     if (!cost) { savingsEl.textContent = ''; return; }
-    if (!hasExcess) {
-      savingsEl.innerHTML = '<span class="text-green-400">Your server is well-matched to the workload.</span>';
-      return;
-    }
-    const utilizationRatio = Math.max(recCores / specs.cpuCores, recRAM / specs.ramGB);
-    const potentialSavings = cost * (1 - utilizationRatio);
-    if (potentialSavings > 5) {
-      savingsEl.innerHTML = `<span class="text-amber-400">Potential savings: ~$${potentialSavings.toFixed(0)}/month if downsized. Consider whether the safety margin is worth it for a blockchain node.</span>`;
-    } else {
-      savingsEl.innerHTML = '<span class="text-green-400">Minimal savings possible — current specs are reasonable.</span>';
-    }
+    if (!hasExcess) { savingsEl.innerHTML = '<span class="text-green-400">Well-matched to workload.</span>'; return; }
+    const ratio = Math.max(recCores / specs.cpuCores, recRAM / specs.ramGB);
+    const savings = cost * (1 - ratio);
+    savingsEl.innerHTML = savings > 5
+      ? `<span class="text-amber-400">~$${savings.toFixed(0)}/mo potential savings if downsized.</span>`
+      : '<span class="text-green-400">Minimal savings possible.</span>';
   };
   window._calcSavingsHandler = calcSavings;
   costInput.addEventListener('input', calcSavings);
   calcSavings();
 }
 
-// -------------------------------------------------------------------------
 // Range buttons
-// -------------------------------------------------------------------------
 document.querySelectorAll('.range-btn').forEach(btn => {
   btn.addEventListener('click', () => {
     document.querySelectorAll('.range-btn').forEach(b => b.classList.remove('active'));
@@ -727,14 +712,11 @@ document.querySelectorAll('.range-btn').forEach(btn => {
   });
 });
 
-// -------------------------------------------------------------------------
 // Init
-// -------------------------------------------------------------------------
 async function init() {
   await fetchSpecs();
   await fetchCurrent();
   await fetchHistory();
-
   setInterval(fetchCurrent, 30000);
   setInterval(fetchHistory, 60000);
 }

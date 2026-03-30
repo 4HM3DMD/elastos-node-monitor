@@ -38,6 +38,21 @@ const SPECS = detectSpecs();
 console.log(`[specs] Detected: ${SPECS.cpuCores} cores, ${SPECS.ramGB} GB RAM, ${SPECS.diskGB} GB Disk (mount: ${SPECS.diskMount})`);
 
 // ---------------------------------------------------------------------------
+// System uptime
+// ---------------------------------------------------------------------------
+
+function getUptime() {
+  if (!IS_LINUX) return { systemSec: os.uptime(), bootTime: Date.now() - os.uptime() * 1000 };
+  try {
+    const raw = fs.readFileSync('/proc/uptime', 'utf8');
+    const sec = parseFloat(raw.split(' ')[0]);
+    return { systemSec: sec, bootTime: Date.now() - sec * 1000 };
+  } catch {
+    return { systemSec: os.uptime(), bootTime: Date.now() - os.uptime() * 1000 };
+  }
+}
+
+// ---------------------------------------------------------------------------
 // CPU usage from /proc/stat (Linux) or os module (fallback)
 // ---------------------------------------------------------------------------
 
@@ -47,9 +62,8 @@ function readProcStat() {
   try {
     const content = fs.readFileSync('/proc/stat', 'utf8');
     const lines = content.split('\n');
-    const aggregate = lines[0]; // "cpu  user nice system idle ..."
+    const aggregate = lines[0];
     const parts = aggregate.trim().split(/\s+/).slice(1).map(Number);
-    // parts: user, nice, system, idle, iowait, irq, softirq, steal
     const idle = parts[3] + (parts[4] || 0);
     const total = parts.reduce((a, b) => a + b, 0);
 
@@ -110,10 +124,7 @@ function getMemory() {
       usedGB: Math.round(used / (1024 ** 3) * 100) / 100,
       freeGB: Math.round(free / (1024 ** 3) * 100) / 100,
       percent: Math.round(used / total * 100 * 10) / 10,
-      buffersGB: 0,
-      cachedGB: 0,
-      swapTotalGB: 0,
-      swapUsedGB: 0,
+      buffersGB: 0, cachedGB: 0, swapTotalGB: 0, swapUsedGB: 0,
     };
   }
 
@@ -121,7 +132,7 @@ function getMemory() {
     const content = fs.readFileSync('/proc/meminfo', 'utf8');
     const get = (key) => {
       const m = content.match(new RegExp(`^${key}:\\s+(\\d+)`, 'm'));
-      return m ? parseInt(m[1], 10) : 0; // in kB
+      return m ? parseInt(m[1], 10) : 0;
     };
     const totalKB = get('MemTotal');
     const freeKB = get('MemFree');
@@ -167,7 +178,6 @@ function getDisk() {
     const lines = raw.trim().split('\n');
     if (lines.length < 2) return null;
     const parts = lines[lines.length - 1].trim().split(/\s+/);
-    // parts: filesystem, 1B-blocks (or 512-blocks), used, available, use%, mountpoint
     let totalBytes, usedBytes, availBytes;
     if (parts[1] && parseInt(parts[1], 10) > 1e9) {
       totalBytes = parseInt(parts[1], 10);
@@ -243,10 +253,12 @@ function getNetwork() {
 // Elastos process discovery
 // ---------------------------------------------------------------------------
 //
-// Chain binaries: matched by exact `comm` field from `ps -eo pid,rss,comm,args`
+// Chain binaries: matched by exact `comm` field from `ps -eo pid,ppid,rss,comm,args`
 // Oracle scripts: matched by `crosschain_*.js` in args, comm = "node" or "MainThread"
 // ESC oracle uses crosschain_oracle.js (not crosschain_esc.js)
-// CPU: real-time via /proc/$PID/stat deltas | RAM: VmRSS from /proc/$PID/status
+// CPU: real-time via /proc/$PID/stat deltas (all threads aggregated)
+// RAM: VmRSS from /proc/$PID/status
+// I/O: /proc/$PID/io read_bytes/write_bytes deltas
 
 const CHAIN_DEFS = [
   { id: 'ela',        name: 'ELA Mainchain',     matchComm: 'ela' },
@@ -261,21 +273,24 @@ const CHAIN_DEFS = [
   { id: 'arbiter',    name: 'Arbiter',            matchComm: 'arbiter' },
 ];
 
-// Per-process CPU tracking via /proc/$PID/stat deltas.
-// ps pcpu is a lifetime average (useless for long-running daemons).
-// This tracks real-time CPU like top/htop does.
-let prevProcCpu = {}; // { pid: { utime, stime, wallMs } }
+// ---------------------------------------------------------------------------
+// Per-process CPU tracking via /proc/$PID/stat deltas
+// /proc/$PID/stat aggregates all threads (thread_group_cputime)
+// ---------------------------------------------------------------------------
+
+let prevProcCpu = {};
+let prevProcIO = {};
 let CLK_TCK = 100;
 try { CLK_TCK = parseInt(execSync('getconf CLK_TCK', { encoding: 'utf8' }).trim(), 10) || 100; } catch {}
 
 function readProcCpuTime(pid) {
   try {
     const stat = fs.readFileSync(`/proc/${pid}/stat`, 'utf8');
-    // Fields: pid (comm) state ppid ... field14=utime field15=stime
     const parts = stat.match(/\)(.*)$/)[1].trim().split(/\s+/);
-    const utime = parseInt(parts[11], 10) || 0; // field 14 (0-indexed from after comm: index 11)
-    const stime = parseInt(parts[12], 10) || 0; // field 15
-    return { utime, stime, wallMs: Date.now() };
+    const utime = parseInt(parts[11], 10) || 0;
+    const stime = parseInt(parts[12], 10) || 0;
+    const starttime = parseInt(parts[19], 10) || 0; // field 22: start time in clock ticks since boot
+    return { utime, stime, starttime, wallMs: Date.now() };
   } catch {
     return null;
   }
@@ -283,43 +298,113 @@ function readProcCpuTime(pid) {
 
 function calcProcCpuPercent(pid) {
   const curr = readProcCpuTime(pid);
-  if (!curr) return 0;
+  if (!curr) return { cpuRaw: 0, cpuSystem: 0 };
 
   const prev = prevProcCpu[pid];
   prevProcCpu[pid] = curr;
 
-  if (!prev) return 0;
+  if (!prev) return { cpuRaw: 0, cpuSystem: 0 };
 
   const dtSec = (curr.wallMs - prev.wallMs) / 1000;
-  if (dtSec < 0.5) return 0;
+  if (dtSec < 0.5) return { cpuRaw: 0, cpuSystem: 0 };
 
   const deltaTicks = (curr.utime - prev.utime) + (curr.stime - prev.stime);
-  const cpuPct = (deltaTicks / CLK_TCK) / dtSec * 100;
-  return Math.round(cpuPct * 10) / 10;
+  const cpuRaw = Math.round((deltaTicks / CLK_TCK) / dtSec * 100 * 10) / 10;
+  const cpuSystem = Math.round(cpuRaw / SPECS.cpuCores * 10) / 10;
+  return { cpuRaw, cpuSystem };
 }
+
+// ---------------------------------------------------------------------------
+// Per-process I/O tracking via /proc/$PID/io deltas
+// ---------------------------------------------------------------------------
+
+function readProcIO(pid) {
+  try {
+    const content = fs.readFileSync(`/proc/${pid}/io`, 'utf8');
+    const get = (key) => {
+      const m = content.match(new RegExp(`^${key}:\\s+(\\d+)`, 'm'));
+      return m ? parseInt(m[1], 10) : 0;
+    };
+    return { readBytes: get('read_bytes'), writeBytes: get('write_bytes'), wallMs: Date.now() };
+  } catch {
+    return null;
+  }
+}
+
+function calcProcIO(pid) {
+  const curr = readProcIO(pid);
+  if (!curr) return { readMBps: 0, writeMBps: 0 };
+
+  const prev = prevProcIO[pid];
+  prevProcIO[pid] = curr;
+
+  if (!prev) return { readMBps: 0, writeMBps: 0 };
+
+  const dtSec = (curr.wallMs - prev.wallMs) / 1000;
+  if (dtSec < 0.5) return { readMBps: 0, writeMBps: 0 };
+
+  return {
+    readMBps: Math.round((curr.readBytes - prev.readBytes) / dtSec / (1024 * 1024) * 100) / 100,
+    writeMBps: Math.round((curr.writeBytes - prev.writeBytes) / dtSec / (1024 * 1024) * 100) / 100,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Per-process metadata: uptime, thread count
+// ---------------------------------------------------------------------------
+
+function getProcMeta(pid) {
+  if (!IS_LINUX) return { uptimeSec: 0, threads: 0 };
+  try {
+    const statusContent = fs.readFileSync(`/proc/${pid}/status`, 'utf8');
+    const threadsMatch = statusContent.match(/^Threads:\s+(\d+)/m);
+    const threads = threadsMatch ? parseInt(threadsMatch[1], 10) : 1;
+
+    const statContent = fs.readFileSync(`/proc/${pid}/stat`, 'utf8');
+    const parts = statContent.match(/\)(.*)$/)[1].trim().split(/\s+/);
+    const starttime = parseInt(parts[19], 10) || 0;
+
+    const uptimeRaw = fs.readFileSync('/proc/uptime', 'utf8');
+    const systemUptime = parseFloat(uptimeRaw.split(' ')[0]);
+
+    const uptimeSec = Math.max(0, systemUptime - (starttime / CLK_TCK));
+    return { uptimeSec: Math.round(uptimeSec), threads };
+  } catch {
+    return { uptimeSec: 0, threads: 0 };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Main process discovery + metrics
+// ---------------------------------------------------------------------------
 
 function getElastosProcesses() {
   const results = [];
 
   let psOut = '';
   try {
-    psOut = execSync('ps -eo pid,rss,comm,args --no-headers', {
+    psOut = execSync('ps -eo pid,ppid,rss,comm,args --no-headers', {
       encoding: 'utf8',
       timeout: 5000,
     });
   } catch {
-    return CHAIN_DEFS.map(def => ({ id: def.id, name: def.name, pid: null, cpu: 0, ramMB: 0, status: 'unknown' }));
+    return CHAIN_DEFS.map(def => ({
+      id: def.id, name: def.name, pid: null, cpu: 0, cpuRaw: 0,
+      ramMB: 0, status: 'unknown', threads: 0, uptimeSec: 0,
+      readMBps: 0, writeMBps: 0,
+    }));
   }
 
   const processes = [];
   for (const line of psOut.trim().split('\n')) {
-    const m = line.trim().match(/^(\d+)\s+(\d+)\s+(\S+)\s+(.*)$/);
+    const m = line.trim().match(/^(\d+)\s+(\d+)\s+(\d+)\s+(\S+)\s+(.*)$/);
     if (!m) continue;
     processes.push({
       pid: parseInt(m[1], 10),
-      rssKB: parseInt(m[2], 10) || 0,
-      comm: m[3],
-      args: m[4],
+      ppid: parseInt(m[2], 10),
+      rssKB: parseInt(m[3], 10) || 0,
+      comm: m[4],
+      args: m[5],
     });
   }
 
@@ -332,7 +417,6 @@ function getElastosProcesses() {
       if (matched.has(proc.pid)) continue;
 
       let isMatch = false;
-
       if (def.matchComm) {
         isMatch = proc.comm === def.matchComm;
       } else if (def.matchArgs) {
@@ -343,26 +427,53 @@ function getElastosProcesses() {
       if (isMatch) {
         matched.add(proc.pid);
 
-        // Real-time CPU from /proc/$PID/stat deltas (not ps lifetime average)
-        const cpu = IS_LINUX ? calcProcCpuPercent(proc.pid) : 0;
+        const { cpuRaw, cpuSystem } = IS_LINUX ? calcProcCpuPercent(proc.pid) : { cpuRaw: 0, cpuSystem: 0 };
 
-        // VmRSS from /proc for accuracy (ps rss can underreport for mmap-heavy processes)
-        let ramMB = Math.round(proc.rssKB / 1024 * 10) / 10;
-        try {
-          const status = fs.readFileSync(`/proc/${proc.pid}/status`, 'utf8');
-          const vmRss = status.match(/^VmRSS:\s+(\d+)/m);
-          if (vmRss) {
-            ramMB = Math.round(parseInt(vmRss[1], 10) / 1024 * 10) / 10;
+        // Sum child processes' CPU + RAM (e.g., Node.js workers forked by oracle)
+        let totalRamKB = 0;
+        let childCpuRaw = 0;
+        const pidGroup = [proc.pid];
+        for (const child of processes) {
+          if (child.ppid === proc.pid && !matched.has(child.pid)) {
+            pidGroup.push(child.pid);
+            matched.add(child.pid);
+            if (IS_LINUX) {
+              const childCpu = calcProcCpuPercent(child.pid);
+              childCpuRaw += childCpu.cpuRaw;
+            }
           }
-        } catch { /* process may have exited */ }
+        }
+
+        // VmRSS from /proc for main + children
+        for (const p of pidGroup) {
+          try {
+            const status = fs.readFileSync(`/proc/${p}/status`, 'utf8');
+            const vmRss = status.match(/^VmRSS:\s+(\d+)/m);
+            if (vmRss) totalRamKB += parseInt(vmRss[1], 10);
+          } catch {
+            const psProc = processes.find(x => x.pid === p);
+            if (psProc) totalRamKB += psProc.rssKB;
+          }
+        }
+
+        const finalCpuRaw = Math.round((cpuRaw + childCpuRaw) * 10) / 10;
+        const finalCpuSystem = Math.round(finalCpuRaw / SPECS.cpuCores * 10) / 10;
+
+        const io = IS_LINUX ? calcProcIO(proc.pid) : { readMBps: 0, writeMBps: 0 };
+        const meta = IS_LINUX ? getProcMeta(proc.pid) : { uptimeSec: 0, threads: 0 };
 
         results.push({
           id: def.id,
           name: def.name,
           pid: proc.pid,
-          cpu,
-          ramMB,
+          cpu: finalCpuSystem,
+          cpuRaw: finalCpuRaw,
+          ramMB: Math.round(totalRamKB / 1024 * 10) / 10,
           status: 'running',
+          threads: meta.threads,
+          uptimeSec: meta.uptimeSec,
+          readMBps: io.readMBps,
+          writeMBps: io.writeMBps,
         });
         found = true;
         break;
@@ -370,7 +481,11 @@ function getElastosProcesses() {
     }
 
     if (!found) {
-      results.push({ id: def.id, name: def.name, pid: null, cpu: 0, ramMB: 0, status: 'stopped' });
+      results.push({
+        id: def.id, name: def.name, pid: null, cpu: 0, cpuRaw: 0,
+        ramMB: 0, status: 'stopped', threads: 0, uptimeSec: 0,
+        readMBps: 0, writeMBps: 0,
+      });
     }
   }
 
@@ -382,10 +497,13 @@ function getElastosProcesses() {
     }
   }
 
-  // Clean up stale PID entries from prevProcCpu
+  // Clean up stale PID entries
   const activePids = new Set(results.filter(r => r.pid).map(r => r.pid));
   for (const pid of Object.keys(prevProcCpu)) {
     if (!activePids.has(parseInt(pid, 10))) delete prevProcCpu[pid];
+  }
+  for (const pid of Object.keys(prevProcIO)) {
+    if (!activePids.has(parseInt(pid, 10))) delete prevProcIO[pid];
   }
 
   return results;
@@ -397,9 +515,8 @@ function getElastosProcesses() {
 
 let chainDiskCache = {};
 let chainDiskLastUpdate = 0;
-const CHAIN_DISK_INTERVAL_MS = 60 * 60 * 1000; // 1 hour
+const CHAIN_DISK_INTERVAL_MS = 60 * 60 * 1000;
 
-// Maps chain IDs to their directory names under the node directory
 const CHAIN_DIR_NAMES = {
   'ela': 'ela', 'esc': 'esc', 'esc-oracle': 'esc-oracle',
   'eid': 'eid', 'eid-oracle': 'eid-oracle', 'eco': 'eco', 'eco-oracle': 'eco-oracle',
@@ -428,7 +545,7 @@ function getChainDiskUsage() {
 
       for (const [chainId, chainDir] of Object.entries(CHAIN_DIR_NAMES)) {
         if (dirName === chainDir) {
-          result[chainId] = Math.round(sizeKB / (1024 * 1024) * 100) / 100; // GB
+          result[chainId] = Math.round(sizeKB / (1024 * 1024) * 100) / 100;
           break;
         }
       }
@@ -538,6 +655,11 @@ function collectSnapshot() {
   const disk = getDisk();
   const network = getNetwork();
   const chains = getElastosProcesses();
+  const uptime = getUptime();
+
+  // Resource attribution: chains vs rest of system
+  const chainsCpuSystem = chains.reduce((s, c) => s + c.cpu, 0);
+  const chainsRamMB = chains.reduce((s, c) => s + c.ramMB, 0);
 
   const snapshot = {
     ts: Date.now(),
@@ -546,6 +668,13 @@ function collectSnapshot() {
     disk,
     network,
     chains,
+    uptime,
+    attribution: {
+      chainsCpuPct: Math.round(chainsCpuSystem * 10) / 10,
+      otherCpuPct: Math.round(Math.max(0, cpu.percent - chainsCpuSystem) * 10) / 10,
+      chainsRamGB: Math.round(chainsRamMB / 1024 * 100) / 100,
+      otherRamGB: Math.round(Math.max(0, memory.usedGB - chainsRamMB / 1024) * 100) / 100,
+    },
   };
 
   latestSnapshot = snapshot;
@@ -617,26 +746,28 @@ app.get('/api/specs', (req, res) => {
 getCpuUsage();
 if (IS_LINUX) readNetDev();
 
-// Prime per-process CPU baselines so first snapshot has real deltas
+// Prime per-process CPU + IO baselines so first real snapshot has valid deltas
 if (IS_LINUX) {
   try {
-    const psOut = execSync('ps -eo pid,rss,comm,args --no-headers', { encoding: 'utf8', timeout: 5000 });
+    const psOut = execSync('ps -eo pid,ppid,rss,comm,args --no-headers', { encoding: 'utf8', timeout: 5000 });
     for (const line of psOut.trim().split('\n')) {
-      const m = line.trim().match(/^(\d+)\s+(\d+)\s+(\S+)\s+(.*)$/);
+      const m = line.trim().match(/^(\d+)\s+(\d+)\s+(\d+)\s+(\S+)\s+(.*)$/);
       if (!m) continue;
       const pid = parseInt(m[1], 10);
-      const comm = m[3];
-      const args = m[4];
+      const comm = m[4];
+      const args = m[5];
       for (const def of CHAIN_DEFS) {
         if ((def.matchComm && comm === def.matchComm) ||
             (def.matchArgs && args.includes(def.matchArgs) && (comm === 'node' || comm === 'MainThread'))) {
           const baseline = readProcCpuTime(pid);
           if (baseline) prevProcCpu[pid] = baseline;
+          const ioBaseline = readProcIO(pid);
+          if (ioBaseline) prevProcIO[pid] = ioBaseline;
           break;
         }
       }
     }
-    console.log('[cpu] Primed per-process CPU baselines for', Object.keys(prevProcCpu).length, 'chain processes');
+    console.log('[init] Primed CPU/IO baselines for', Object.keys(prevProcCpu).length, 'chain processes');
   } catch {}
 }
 
