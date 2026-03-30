@@ -212,6 +212,14 @@ function apiUrl(path) {
   return `${API_BASE}${path}${TOKEN ? sep + 'token=' + TOKEN : ''}`;
 }
 
+function showAuthError() {
+  document.getElementById('lastUpdated').textContent = 'Authentication failed';
+  document.getElementById('verdictTitle').textContent = 'Unauthorized';
+  document.getElementById('verdictSubtitle').textContent = 'Invalid or missing token. Use the URL printed during installation (includes ?token=...).';
+  const banner = document.getElementById('verdictBanner');
+  banner.className = 'verdict-box verdict-tight';
+}
+
 // -------------------------------------------------------------------------
 // Chart.js defaults
 // -------------------------------------------------------------------------
@@ -236,7 +244,6 @@ function usageColorAlpha(pct, alpha) {
 
 const CHAIN_COLORS = {
   'ela': '#3b82f6',
-  'did': '#8b5cf6',
   'esc': '#06b6d4',
   'esc-oracle': '#0891b2',
   'eid': '#10b981',
@@ -246,7 +253,6 @@ const CHAIN_COLORS = {
   'pg': '#ec4899',
   'pg-oracle': '#db2777',
   'arbiter': '#f59e0b',
-  'carrier': '#ef4444',
 };
 
 // -------------------------------------------------------------------------
@@ -408,6 +414,10 @@ async function fetchSpecs() {
 async function fetchCurrent() {
   try {
     const res = await fetch(apiUrl('/api/current'));
+    if (!res.ok) {
+      if (res.status === 401) showAuthError();
+      return;
+    }
     const data = await res.json();
     if (!data.ts || data.ts === 0) return;
 
@@ -554,6 +564,7 @@ let currentRange = '1h';
 async function fetchHistory() {
   try {
     const res = await fetch(apiUrl(`/api/history?range=${currentRange}`));
+    if (!res.ok) return;
     const data = await res.json();
     if (!data.length) return;
 

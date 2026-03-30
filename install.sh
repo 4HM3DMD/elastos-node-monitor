@@ -135,24 +135,39 @@ else
 fi
 
 # ============================================================================
-# Step 5: Generate auth token
+# Step 5: Generate auth token + write .env
 # ============================================================================
 
-AUTH_TOKEN=$(head -c 24 /dev/urandom | base64 | tr -d '/+=' | head -c 32)
-log "Auth token generated"
+if [ -f "$MONITOR_DIR/.env" ]; then
+    EXISTING_TOKEN=$(grep -oP '^AUTH_TOKEN=\K.*' "$MONITOR_DIR/.env" 2>/dev/null || echo "")
+    if [ -n "$EXISTING_TOKEN" ]; then
+        AUTH_TOKEN="$EXISTING_TOKEN"
+        log "Existing .env found — keeping your current auth token"
 
-# ============================================================================
-# Step 6: Write .env
-# ============================================================================
-
-cat > "$MONITOR_DIR/.env" <<EOF
+        # Update non-secret values in case specs changed
+        sed -i "s|^ELASTOS_NODE_DIR=.*|ELASTOS_NODE_DIR=${ELASTOS_DIR}|" "$MONITOR_DIR/.env"
+        sed -i "s|^DISK_MOUNT=.*|DISK_MOUNT=${DISK_MOUNT}|" "$MONITOR_DIR/.env"
+        log "Updated node directory and disk mount in .env"
+    else
+        AUTH_TOKEN=$(head -c 24 /dev/urandom | base64 | tr -d '/+=' | head -c 32)
+        cat > "$MONITOR_DIR/.env" <<EOF
 PORT=${DEFAULT_PORT}
 AUTH_TOKEN=${AUTH_TOKEN}
 ELASTOS_NODE_DIR=${ELASTOS_DIR}
 DISK_MOUNT=${DISK_MOUNT}
 EOF
-
-log "Configuration written to .env"
+        log "Auth token generated and .env written"
+    fi
+else
+    AUTH_TOKEN=$(head -c 24 /dev/urandom | base64 | tr -d '/+=' | head -c 32)
+    cat > "$MONITOR_DIR/.env" <<EOF
+PORT=${DEFAULT_PORT}
+AUTH_TOKEN=${AUTH_TOKEN}
+ELASTOS_NODE_DIR=${ELASTOS_DIR}
+DISK_MOUNT=${DISK_MOUNT}
+EOF
+    log "Auth token generated and .env written"
+fi
 
 # ============================================================================
 # Step 7: Create systemd service

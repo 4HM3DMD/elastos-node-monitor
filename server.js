@@ -243,18 +243,13 @@ function getNetwork() {
 // Elastos process discovery
 // ---------------------------------------------------------------------------
 //
-// Matching rules derived from actual `ps -eo pid,pcpu,rss,comm,args` output
-// on a running Elastos supernode:
-//
-// Chain binaries show comm = binary name (ela, esc, eid, eco, pg, arbiter, etc.)
-// Oracle scripts show comm = "MainThread" or "node", args = "node crosschain_*.js"
-// ESC oracle is special: its script is crosschain_oracle.js (not crosschain_esc.js)
-//
-// We skip bash wrappers and rotatelogs processes.
+// Chain binaries: matched by exact `comm` field from `ps -eo pid,rss,comm,args`
+// Oracle scripts: matched by `crosschain_*.js` in args, comm = "node" or "MainThread"
+// ESC oracle uses crosschain_oracle.js (not crosschain_esc.js)
+// CPU: real-time via /proc/$PID/stat deltas | RAM: VmRSS from /proc/$PID/status
 
 const CHAIN_DEFS = [
   { id: 'ela',        name: 'ELA Mainchain',     matchComm: 'ela' },
-  { id: 'did',        name: 'DID Sidechain',     matchComm: 'did' },
   { id: 'esc',        name: 'ESC Sidechain',     matchComm: 'esc' },
   { id: 'esc-oracle', name: 'ESC Oracle',         matchArgs: 'crosschain_oracle.js' },
   { id: 'eid',        name: 'EID Sidechain',     matchComm: 'eid' },
@@ -264,7 +259,6 @@ const CHAIN_DEFS = [
   { id: 'pg',         name: 'PG Sidechain',      matchComm: 'pg' },
   { id: 'pg-oracle',  name: 'PG Oracle',          matchArgs: 'crosschain_pg.js' },
   { id: 'arbiter',    name: 'Arbiter',            matchComm: 'arbiter' },
-  { id: 'carrier',    name: 'Carrier Bootstrap',  matchComm: 'carrier' },
 ];
 
 // Per-process CPU tracking via /proc/$PID/stat deltas.
@@ -407,9 +401,9 @@ const CHAIN_DISK_INTERVAL_MS = 60 * 60 * 1000; // 1 hour
 
 // Maps chain IDs to their directory names under the node directory
 const CHAIN_DIR_NAMES = {
-  'ela': 'ela', 'did': 'did', 'esc': 'esc', 'esc-oracle': 'esc-oracle',
+  'ela': 'ela', 'esc': 'esc', 'esc-oracle': 'esc-oracle',
   'eid': 'eid', 'eid-oracle': 'eid-oracle', 'eco': 'eco', 'eco-oracle': 'eco-oracle',
-  'pg': 'pg', 'pg-oracle': 'pg-oracle', 'arbiter': 'arbiter', 'carrier': 'carrier',
+  'pg': 'pg', 'pg-oracle': 'pg-oracle', 'arbiter': 'arbiter',
 };
 
 function getChainDiskUsage() {
@@ -636,8 +630,8 @@ if (IS_LINUX) {
       for (const def of CHAIN_DEFS) {
         if ((def.matchComm && comm === def.matchComm) ||
             (def.matchArgs && args.includes(def.matchArgs) && (comm === 'node' || comm === 'MainThread'))) {
-          readProcCpuTime(pid);
-          prevProcCpu[pid] = readProcCpuTime(pid) || prevProcCpu[pid];
+          const baseline = readProcCpuTime(pid);
+          if (baseline) prevProcCpu[pid] = baseline;
           break;
         }
       }
