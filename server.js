@@ -814,6 +814,30 @@ app.get('/api/diag', (req, res) => {
     result.readProcCpuTime = cpuTime;
     const prevCpu = prevProcCpu[pid];
     result.prevProcCpu = prevCpu ? { utime: prevCpu.utime, stime: prevCpu.stime, wallMs: prevCpu.wallMs } : null;
+
+    // Step-by-step replica of readProcCpuTime for diagnosis
+    const debug = {};
+    try {
+      const rawStat = fs.readFileSync(`/proc/${pid}/stat`, 'utf8');
+      debug.rawLen = rawStat.length;
+      debug.rawFirst100 = rawStat.substring(0, 100);
+      debug.hasCloseParen = rawStat.includes(')');
+      const regexMatch = rawStat.match(/\)(.*)$/);
+      debug.regexMatched = !!regexMatch;
+      if (regexMatch) {
+        debug.captureLen = regexMatch[1].length;
+        const parts = regexMatch[1].trim().split(/\s+/);
+        debug.fieldCount = parts.length;
+        debug.field11 = parts[11];
+        debug.field12 = parts[12];
+        debug.field19 = parts[19];
+        debug.utime = parseInt(parts[11], 10);
+        debug.stime = parseInt(parts[12], 10);
+        debug.utimeOrZero = parseInt(parts[11], 10) || 0;
+        debug.stimeOrZero = parseInt(parts[12], 10) || 0;
+      }
+    } catch (e) { debug.error = e.code || e.message; debug.stack = e.stack; }
+    result.cpuDebug = debug;
   }
 
   res.json(result);
