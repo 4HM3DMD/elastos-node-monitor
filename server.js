@@ -611,20 +611,11 @@ function pruneOldFiles() {
   }
 }
 
-function readHistory(rangeMs) {
+function readHistoryRaw(rangeMs) {
   ensureDataDir();
   const now = Date.now();
   const since = now - rangeMs;
-  const MAX_POINTS = 400;
-
-  // Estimate how many snapshots exist in this range and pre-compute a skip ratio.
-  // At 3s intervals: 1h=1200, 24h=28800, 7d=201600, 30d=864000 lines.
-  // We only want ~MAX_POINTS, so skip (estimated_total / MAX_POINTS) lines.
-  const estimatedTotal = Math.ceil(rangeMs / COLLECT_INTERVAL_MS);
-  const skipEvery = Math.max(1, Math.floor(estimatedTotal / MAX_POINTS));
-
   const results = [];
-  let lineIndex = 0;
 
   try {
     const files = fs.readdirSync(DATA_DIR).filter(f => f.endsWith('.jsonl')).sort();
@@ -634,41 +625,34 @@ function readHistory(rangeMs) {
       if (fileDate.getTime() < since) continue;
 
       const content = fs.readFileSync(path.join(DATA_DIR, f), 'utf8');
-      const lines = content.split('\n');
-      for (const line of lines) {
+      for (const line of content.split('\n')) {
         if (!line) continue;
-        lineIndex++;
-        if (skipEvery > 1 && (lineIndex % skipEvery) !== 0) continue;
         try {
           const snap = JSON.parse(line);
           if (snap.ts >= since) results.push(snap);
-        } catch { /* skip malformed */ }
+        } catch {}
       }
     }
-  } catch { /* no data yet */ }
-
-  // Always include the very last data point for accuracy
-  if (results.length > 0) {
-    try {
-      const files = fs.readdirSync(DATA_DIR).filter(f => f.endsWith('.jsonl')).sort();
-      if (files.length > 0) {
-        const lastFile = fs.readFileSync(path.join(DATA_DIR, files[files.length - 1]), 'utf8');
-        const lastLines = lastFile.trimEnd().split('\n');
-        for (let i = lastLines.length - 1; i >= 0; i--) {
-          if (!lastLines[i]) continue;
-          try {
-            const lastSnap = JSON.parse(lastLines[i]);
-            if (lastSnap.ts >= since && results[results.length - 1].ts !== lastSnap.ts) {
-              results.push(lastSnap);
-            }
-          } catch {}
-          break;
-        }
-      }
-    } catch {}
-  }
+  } catch {}
 
   return results;
+}
+
+function downsample(snapshots, maxPoints) {
+  if (snapshots.length <= maxPoints) return snapshots;
+  const step = snapshots.length / maxPoints;
+  const result = [];
+  for (let i = 0; i < maxPoints; i++) {
+    result.push(snapshots[Math.floor(i * step)]);
+  }
+  if (result[result.length - 1] !== snapshots[snapshots.length - 1]) {
+    result.push(snapshots[snapshots.length - 1]);
+  }
+  return result;
+}
+
+function readHistory(rangeMs) {
+  return downsample(readHistoryRaw(rangeMs), 400);
 }
 
 // ---------------------------------------------------------------------------
@@ -783,26 +767,33 @@ app.get('/api/export', (req, res) => {
   const rangeKey = req.query.range || '24h';
   const rangeMs = ranges[rangeKey] || ranges['24h'];
   const format = req.query.format || 'json';
-  const history = readHistory(rangeMs);
+
+  const allData = readHistoryRaw(rangeMs);
+  const tsData = downsample(allData, 5000);
 
   const hostname = os.hostname();
   const now = new Date();
-
   const current = latestSnapshot || {};
   const chains = current.chains || [];
   const runningCount = chains.filter(c => c.status === 'running').length;
 
+  const chainIds = CHAIN_DEFS.map(d => d.id);
+
   let cpuValues = [], ramValues = [], diskValues = [];
   const chainPeaks = {};
-  for (const snap of history) {
+  const chainAvgs = {};
+  for (const snap of allData) {
     cpuValues.push(snap.cpu.percent);
     ramValues.push(snap.memory.usedGB);
     if (snap.disk) diskValues.push(snap.disk.usedGB);
     for (const c of (snap.chains || [])) {
-      if (!chainPeaks[c.id]) chainPeaks[c.id] = { peakCpu: 0, peakCpuRaw: 0, peakRamMB: 0, name: c.name };
+      if (!chainPeaks[c.id]) { chainPeaks[c.id] = { peakCpu: 0, peakCpuRaw: 0, peakRamMB: 0 }; chainAvgs[c.id] = { cpuSum: 0, ramSum: 0, count: 0 }; }
       if (c.cpu > chainPeaks[c.id].peakCpu) chainPeaks[c.id].peakCpu = c.cpu;
       if ((c.cpuRaw || 0) > chainPeaks[c.id].peakCpuRaw) chainPeaks[c.id].peakCpuRaw = c.cpuRaw || 0;
       if (c.ramMB > chainPeaks[c.id].peakRamMB) chainPeaks[c.id].peakRamMB = c.ramMB;
+      chainAvgs[c.id].cpuSum += c.cpu;
+      chainAvgs[c.id].ramSum += c.ramMB;
+      chainAvgs[c.id].count++;
     }
   }
 
@@ -813,43 +804,28 @@ app.get('/api/export', (req, res) => {
     exportedAt: now.toISOString(),
     hostname,
     range: rangeKey,
-    dataPoints: history.length,
+    dataPoints: allData.length,
+    timeSeriesPoints: tsData.length,
     specs: SPECS,
     system: {
       uptimeDays: current.uptime ? +(current.uptime.systemSec / 86400).toFixed(1) : 0,
-      cpu: {
-        currentPct: current.cpu ? current.cpu.percent : 0,
-        avgPct: +avg(cpuValues).toFixed(2),
-        peakPct: +peak(cpuValues).toFixed(2),
-        loadAvg: current.cpu ? current.cpu.loadAvg : [],
-      },
-      ram: {
-        currentGB: current.memory ? current.memory.usedGB : 0,
-        avgGB: +avg(ramValues).toFixed(2),
-        peakGB: +peak(ramValues).toFixed(2),
-        totalGB: SPECS.ramGB,
-        cachedGB: current.memory ? current.memory.cachedGB : 0,
-      },
-      disk: {
-        currentGB: current.disk ? current.disk.usedGB : 0,
-        totalGB: SPECS.diskGB,
-        percentUsed: current.disk ? current.disk.percent : 0,
-      },
+      cpu: { currentPct: current.cpu ? current.cpu.percent : 0, avgPct: +avg(cpuValues).toFixed(2), peakPct: +peak(cpuValues).toFixed(2), loadAvg: current.cpu ? current.cpu.loadAvg : [] },
+      ram: { currentGB: current.memory ? current.memory.usedGB : 0, avgGB: +avg(ramValues).toFixed(2), peakGB: +peak(ramValues).toFixed(2), totalGB: SPECS.ramGB, cachedGB: current.memory ? current.memory.cachedGB : 0 },
+      disk: { currentGB: current.disk ? current.disk.usedGB : 0, totalGB: SPECS.diskGB, percentUsed: current.disk ? current.disk.percent : 0 },
     },
-    chains: chains.map(c => ({
-      id: c.id,
-      name: c.name,
-      status: c.status,
-      cpu: { currentPct: c.cpu, currentRaw: c.cpuRaw || 0, peakPct: chainPeaks[c.id] ? chainPeaks[c.id].peakCpu : 0, peakRaw: chainPeaks[c.id] ? chainPeaks[c.id].peakCpuRaw : 0 },
-      ramMB: c.ramMB,
-      peakRamMB: chainPeaks[c.id] ? chainPeaks[c.id].peakRamMB : 0,
-      diskGB: c.diskGB || 0,
-      threads: c.threads || 0,
-      uptimeDays: c.uptimeSec ? +(c.uptimeSec / 86400).toFixed(1) : 0,
-    })),
+    chains: chains.map(c => {
+      const pa = chainAvgs[c.id] || { cpuSum: 0, ramSum: 0, count: 1 };
+      const pp = chainPeaks[c.id] || { peakCpu: 0, peakCpuRaw: 0, peakRamMB: 0 };
+      return {
+        id: c.id, name: c.name, status: c.status,
+        cpu: { currentPct: c.cpu, peakPct: pp.peakCpu, avgPct: +(pa.cpuSum / pa.count).toFixed(3) },
+        ramMB: c.ramMB, peakRamMB: pp.peakRamMB, avgRamMB: +(pa.ramSum / pa.count).toFixed(1),
+        diskGB: c.diskGB || 0, threads: c.threads || 0,
+        uptimeDays: c.uptimeSec ? +(c.uptimeSec / 86400).toFixed(1) : 0,
+      };
+    }),
     totals: {
-      chainsRunning: runningCount,
-      chainsTotal: chains.length,
+      chainsRunning: runningCount, chainsTotal: chains.length,
       chainsCpuPct: current.attribution ? current.attribution.chainsCpuPct : 0,
       chainsRamGB: current.attribution ? current.attribution.chainsRamGB : 0,
       chainsDiskGB: +chains.reduce((s, c) => s + (c.diskGB || 0), 0).toFixed(2),
@@ -858,29 +834,78 @@ app.get('/api/export', (req, res) => {
 
   if (format === 'csv') {
     const lines = [];
-    lines.push('# Elastos Node Monitor Export');
+    lines.push('# Elastos Node Monitor — Full Export');
     lines.push(`# Hostname: ${hostname}`);
     lines.push(`# Exported: ${now.toISOString()}`);
-    lines.push(`# Range: ${rangeKey} (${history.length} data points)`);
+    lines.push(`# Range: ${rangeKey} (${allData.length} total snapshots, ${tsData.length} in time series below)`);
     lines.push(`# Specs: ${SPECS.cpuCores} cores, ${SPECS.ramGB} GB RAM, ${SPECS.diskGB} GB Disk`);
+    lines.push(`# System uptime: ${report.system.uptimeDays} days`);
     lines.push('');
-    lines.push('## System Summary');
-    lines.push('metric,current,average,peak');
-    lines.push(`CPU %,${report.system.cpu.currentPct},${report.system.cpu.avgPct},${report.system.cpu.peakPct}`);
-    lines.push(`RAM GB,${report.system.ram.currentGB},${report.system.ram.avgGB},${report.system.ram.peakGB}`);
-    lines.push(`Disk GB,${report.system.disk.currentGB},,`);
-    lines.push('');
-    lines.push('## Per-Chain');
-    lines.push('chain,status,cpu_pct,cpu_peak_pct,ram_mb,ram_peak_mb,disk_gb,threads,uptime_days');
+
+    lines.push('section,metric,current,average,peak');
+    lines.push(`system,cpu_pct,${report.system.cpu.currentPct},${report.system.cpu.avgPct},${report.system.cpu.peakPct}`);
+    lines.push(`system,ram_gb,${report.system.ram.currentGB},${report.system.ram.avgGB},${report.system.ram.peakGB}`);
+    lines.push(`system,disk_gb,${report.system.disk.currentGB},,${report.system.disk.totalGB}`);
     for (const c of report.chains) {
-      lines.push(`${c.id},${c.status},${c.cpu.currentPct},${c.cpu.peakPct},${c.ramMB},${c.peakRamMB},${c.diskGB},${c.threads},${c.uptimeDays}`);
+      lines.push(`chain,${c.id}_cpu_pct,${c.cpu.currentPct},${c.cpu.avgPct},${c.cpu.peakPct}`);
+      lines.push(`chain,${c.id}_ram_mb,${c.ramMB},${c.avgRamMB},${c.peakRamMB}`);
+      lines.push(`chain,${c.id}_disk_gb,${c.diskGB},,`);
+      lines.push(`chain,${c.id}_status,${c.status},,`);
+      lines.push(`chain,${c.id}_threads,${c.threads},,`);
+      lines.push(`chain,${c.id}_uptime_days,${c.uptimeDays},,`);
     }
+    lines.push('');
+
+    // Build time-series columns dynamically from chain IDs
+    const tsCols = ['timestamp', 'datetime', 'cpu_pct', 'ram_used_gb', 'ram_cached_gb', 'disk_used_gb', 'net_rx_mbps', 'net_tx_mbps'];
+    for (const id of chainIds) { tsCols.push(`${id}_cpu`, `${id}_ram_mb`); }
+    lines.push(tsCols.join(','));
+
+    for (const snap of tsData) {
+      const chainMap = {};
+      for (const c of (snap.chains || [])) chainMap[c.id] = c;
+      const row = [
+        snap.ts,
+        new Date(snap.ts).toISOString(),
+        snap.cpu.percent,
+        snap.memory.usedGB,
+        snap.memory.cachedGB || 0,
+        snap.disk ? snap.disk.usedGB : '',
+        snap.network ? snap.network.rxMBps : 0,
+        snap.network ? snap.network.txMBps : 0,
+      ];
+      for (const id of chainIds) {
+        const c = chainMap[id];
+        row.push(c ? c.cpu : 0);
+        row.push(c ? c.ramMB : 0);
+      }
+      lines.push(row.join(','));
+    }
+
     const csvBody = lines.join('\n');
     const filename = `elastos-monitor-${hostname}-${rangeKey}-${now.toISOString().slice(0, 10)}.csv`;
     res.setHeader('Content-Type', 'text/csv');
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
     return res.send(csvBody);
   }
+
+  // JSON: include time series
+  report.timeSeries = tsData.map(snap => {
+    const row = {
+      ts: snap.ts,
+      cpu: snap.cpu.percent,
+      ramUsedGB: snap.memory.usedGB,
+      ramCachedGB: snap.memory.cachedGB || 0,
+      diskUsedGB: snap.disk ? snap.disk.usedGB : 0,
+      netRxMBps: snap.network ? snap.network.rxMBps : 0,
+      netTxMBps: snap.network ? snap.network.txMBps : 0,
+    };
+    for (const c of (snap.chains || [])) {
+      row[`${c.id}_cpu`] = c.cpu;
+      row[`${c.id}_ram`] = c.ramMB;
+    }
+    return row;
+  });
 
   const filename = `elastos-monitor-${hostname}-${rangeKey}-${now.toISOString().slice(0, 10)}.json`;
   res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
