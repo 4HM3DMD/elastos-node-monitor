@@ -146,7 +146,7 @@
     <!-- Per-Chain Charts (CPU, RAM, Disk) -->
     <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
       <div class="card p-6">
-        <h3 class="text-slate-400 text-sm font-medium mb-4 uppercase tracking-wider">CPU per Chain (% of 1 core)</h3>
+        <h3 class="text-slate-400 text-sm font-medium mb-4 uppercase tracking-wider" id="cpuChartTitle">CPU per Chain (%)</h3>
         <div style="height:360px;">
           <canvas id="cpuBarChart"></canvas>
         </div>
@@ -174,7 +174,7 @@
             <tr class="text-slate-400 border-b border-slate-700">
               <th class="text-left py-2 px-2">Chain</th>
               <th class="text-left py-2 px-2">Status</th>
-              <th class="text-right py-2 px-2" title="Per-core CPU usage">CPU</th>
+              <th class="text-right py-2 px-2" title="% of total system CPU (all cores)">CPU</th>
               <th class="text-right py-2 px-2">RAM</th>
               <th class="text-right py-2 px-2">Disk</th>
               <th class="text-right py-2 px-2">I/O</th>
@@ -487,10 +487,11 @@ function updateChainBreakdown(chains) {
 
   const running = chains.filter(c => c.status === 'running');
 
-  // CPU chart: per-core %, sorted ascending
-  const byCpu = [...running].filter(c => (c.cpuRaw || 0) > 0).sort((a, b) => (a.cpuRaw || 0) - (b.cpuRaw || 0));
+  // CPU chart: % of total system capacity (all cores), sorted ascending
+  document.getElementById('cpuChartTitle').textContent = `CPU per Chain (% of ${specs.cpuCores} cores)`;
+  const byCpu = [...running].filter(c => c.cpu > 0).sort((a, b) => a.cpu - b.cpu);
   cpuBarChart.data.labels = byCpu.map(c => c.name);
-  cpuBarChart.data.datasets[0].data = byCpu.map(c => c.cpuRaw || 0);
+  cpuBarChart.data.datasets[0].data = byCpu.map(c => c.cpu);
   cpuBarChart.data.datasets[0].backgroundColor = byCpu.map(c => CHAIN_COLORS[c.id] || '#64748b');
   cpuBarChart.update('none');
 
@@ -523,7 +524,7 @@ function updateChainBreakdown(chains) {
         <span class="status-dot status-${c.status}"></span>
         <span class="ml-1.5 capitalize">${c.status}</span>
       </td>
-      <td class="py-2 px-2 text-right font-mono" title="System: ${(c.cpu || 0).toFixed(2)}% of ${specs.cpuCores} cores">${(c.cpuRaw || 0).toFixed(1)}%</td>
+      <td class="py-2 px-2 text-right font-mono" title="${(c.cpuRaw || 0).toFixed(1)}% of 1 core">${(c.cpu || 0).toFixed(2)}%</td>
       <td class="py-2 px-2 text-right font-mono">${c.status === 'running' ? fmtRAM(c.ramMB) : '—'}</td>
       <td class="py-2 px-2 text-right font-mono">${fmtDisk(c.diskGB)}</td>
       <td class="py-2 px-2 text-right font-mono text-slate-500">${c.status === 'running' ? fmtIO(c.readMBps, c.writeMBps) : '—'}</td>
@@ -535,7 +536,7 @@ function updateChainBreakdown(chains) {
     <tr class="border-t-2 border-slate-600 font-semibold">
       <td class="py-2 px-2 text-slate-300">Total (all chains)</td>
       <td class="py-2 px-2"></td>
-      <td class="py-2 px-2 text-right font-mono text-white" title="System: ${totalCpuSystem.toFixed(2)}%">${totalCpuRaw.toFixed(1)}%</td>
+      <td class="py-2 px-2 text-right font-mono text-white" title="${totalCpuRaw.toFixed(1)}% of 1 core">${totalCpuSystem.toFixed(2)}%</td>
       <td class="py-2 px-2 text-right font-mono text-white">${fmtRAM(totalRamMB)}</td>
       <td class="py-2 px-2 text-right font-mono text-white">${totalDiskGB > 0 ? totalDiskGB.toFixed(1) + ' GB' : '—'}</td>
       <td class="py-2 px-2" colspan="4"></td>
