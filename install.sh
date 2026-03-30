@@ -36,38 +36,42 @@ echo ""
 # Step 1: Check/install Node.js
 # ============================================================================
 
-NEED_NODE=false
+NODE_OK=false
+NPM_OK=false
 
 if command -v node &>/dev/null; then
     NODE_VERSION=$(node -v | sed 's/v//')
     NODE_MAJOR=$(echo "$NODE_VERSION" | cut -d. -f1)
     if [ "$NODE_MAJOR" -ge 18 ]; then
-        log "Node.js v${NODE_VERSION} found (>= 18 required)"
+        log "Node.js v${NODE_VERSION} found"
+        NODE_OK=true
     else
-        warn "Node.js v${NODE_VERSION} is too old (need >= 18)."
-        NEED_NODE=true
+        warn "Node.js v${NODE_VERSION} is too old (need >= 18)"
     fi
-else
-    NEED_NODE=true
 fi
 
-if ! command -v npm &>/dev/null; then
-    warn "npm not found."
-    NEED_NODE=true
+if command -v npm &>/dev/null; then
+    log "npm v$(npm -v) found"
+    NPM_OK=true
 fi
 
-if [ "$NEED_NODE" = true ]; then
-    info "Installing Node.js 20.x with npm from NodeSource (this may take a minute)..."
+if [ "$NODE_OK" = true ] && [ "$NPM_OK" = false ]; then
+    info "Node.js is installed but npm is missing. Installing npm..."
+    $SUDO apt-get update -y
+    $SUDO apt-get install -y npm
+    log "npm v$(npm -v) installed"
+elif [ "$NODE_OK" = false ]; then
+    info "Installing Node.js 20.x with npm from NodeSource..."
     if ! command -v curl &>/dev/null; then
-        info "  Installing curl..."
-        $SUDO apt-get update -qq && $SUDO apt-get install -y -qq curl
+        $SUDO apt-get update -y && $SUDO apt-get install -y curl
     fi
-    info "  Adding NodeSource repository..."
     curl -fsSL https://deb.nodesource.com/setup_20.x | $SUDO -E bash -
-    info "  Installing nodejs package..."
     $SUDO apt-get install -y nodejs
     log "Node.js $(node -v) + npm $(npm -v) installed"
 fi
+
+command -v node &>/dev/null || err "Node.js installation failed. Install manually: https://nodejs.org"
+command -v npm &>/dev/null || err "npm installation failed. Try: apt install npm"
 
 # ============================================================================
 # Step 2: Install npm dependencies
