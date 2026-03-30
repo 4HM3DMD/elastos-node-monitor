@@ -283,15 +283,29 @@ let prevProcIO = {};
 let CLK_TCK = 100;
 try { CLK_TCK = parseInt(execSync('getconf CLK_TCK', { encoding: 'utf8' }).trim(), 10) || 100; } catch {}
 
+let _procStatWarnLogged = new Set();
+
 function readProcCpuTime(pid) {
   try {
     const stat = fs.readFileSync(`/proc/${pid}/stat`, 'utf8');
-    const parts = stat.match(/\)(.*)$/)[1].trim().split(/\s+/);
+    const m = stat.match(/\)(.*)$/);
+    if (!m) {
+      if (!_procStatWarnLogged.has(pid)) {
+        console.warn(`[proc] /proc/${pid}/stat: unexpected format (no closing paren)`);
+        _procStatWarnLogged.add(pid);
+      }
+      return null;
+    }
+    const parts = m[1].trim().split(/\s+/);
     const utime = parseInt(parts[11], 10) || 0;
     const stime = parseInt(parts[12], 10) || 0;
-    const starttime = parseInt(parts[19], 10) || 0; // field 22: start time in clock ticks since boot
+    const starttime = parseInt(parts[19], 10) || 0;
     return { utime, stime, starttime, wallMs: Date.now() };
-  } catch {
+  } catch (e) {
+    if (!_procStatWarnLogged.has(pid)) {
+      console.warn(`[proc] Failed to read /proc/${pid}/stat: ${e.code || e.message}`);
+      _procStatWarnLogged.add(pid);
+    }
     return null;
   }
 }
@@ -309,8 +323,8 @@ function calcProcCpuPercent(pid) {
   if (dtSec < 0.5) return { cpuRaw: 0, cpuSystem: 0 };
 
   const deltaTicks = (curr.utime - prev.utime) + (curr.stime - prev.stime);
-  const cpuRaw = Math.round((deltaTicks / CLK_TCK) / dtSec * 100 * 10) / 10;
-  const cpuSystem = Math.round(cpuRaw / SPECS.cpuCores * 10) / 10;
+  const cpuRaw = Math.round((deltaTicks / CLK_TCK) / dtSec * 100 * 100) / 100;
+  const cpuSystem = Math.round(cpuRaw / SPECS.cpuCores * 100) / 100;
   return { cpuRaw, cpuSystem };
 }
 
@@ -355,23 +369,25 @@ function calcProcIO(pid) {
 
 function getProcMeta(pid) {
   if (!IS_LINUX) return { uptimeSec: 0, threads: 0 };
+
+  let threads = 0;
   try {
     const statusContent = fs.readFileSync(`/proc/${pid}/status`, 'utf8');
     const threadsMatch = statusContent.match(/^Threads:\s+(\d+)/m);
-    const threads = threadsMatch ? parseInt(threadsMatch[1], 10) : 1;
+    threads = threadsMatch ? parseInt(threadsMatch[1], 10) : 1;
+  } catch {}
 
+  let uptimeSec = 0;
+  try {
     const statContent = fs.readFileSync(`/proc/${pid}/stat`, 'utf8');
     const parts = statContent.match(/\)(.*)$/)[1].trim().split(/\s+/);
     const starttime = parseInt(parts[19], 10) || 0;
-
     const uptimeRaw = fs.readFileSync('/proc/uptime', 'utf8');
     const systemUptime = parseFloat(uptimeRaw.split(' ')[0]);
+    uptimeSec = Math.round(Math.max(0, systemUptime - (starttime / CLK_TCK)));
+  } catch {}
 
-    const uptimeSec = Math.max(0, systemUptime - (starttime / CLK_TCK));
-    return { uptimeSec: Math.round(uptimeSec), threads };
-  } catch {
-    return { uptimeSec: 0, threads: 0 };
-  }
+  return { uptimeSec, threads };
 }
 
 // ---------------------------------------------------------------------------
@@ -456,8 +472,8 @@ function getElastosProcesses() {
           }
         }
 
-        const finalCpuRaw = Math.round((cpuRaw + childCpuRaw) * 10) / 10;
-        const finalCpuSystem = Math.round(finalCpuRaw / SPECS.cpuCores * 10) / 10;
+        const finalCpuRaw = Math.round((cpuRaw + childCpuRaw) * 100) / 100;
+        const finalCpuSystem = Math.round(finalCpuRaw / SPECS.cpuCores * 100) / 100;
 
         const io = IS_LINUX ? calcProcIO(proc.pid) : { readMBps: 0, writeMBps: 0 };
         const meta = IS_LINUX ? getProcMeta(proc.pid) : { uptimeSec: 0, threads: 0 };
@@ -668,12 +684,18 @@ function readHistory(rangeMs) {
 let latestSnapshot = null;
 
 function collectSnapshot() {
-  const cpu = getCpuUsage();
-  const memory = getMemory();
-  const disk = getDisk();
-  const network = getNetwork();
-  const chains = getElastosProcesses();
-  const uptime = getUptime();
+  let cpu, memory, disk, network, chains, uptime;
+  try {
+    cpu = getCpuUsage();
+    memory = getMemory();
+    disk = getDisk();
+    network = getNetwork();
+    chains = getElastosProcesses();
+    uptime = getUptime();
+  } catch (e) {
+    console.error('[collector] FATAL: collectSnapshot crashed:', e.message, e.stack);
+    return null;
+  }
 
   // Resource attribution: chains vs rest of system
   const chainsCpuSystem = chains.reduce((s, c) => s + c.cpu, 0);
@@ -757,6 +779,46 @@ app.get('/api/specs', (req, res) => {
   res.json(SPECS);
 });
 
+app.get('/api/diag', (req, res) => {
+  const result = { platform: os.platform(), isLinux: IS_LINUX, clkTck: CLK_TCK, specs: SPECS };
+  result.primedCpuPids = Object.keys(prevProcCpu).map(Number);
+  result.primedIOPids = Object.keys(prevProcIO).map(Number);
+
+  const chains = latestSnapshot ? latestSnapshot.chains : [];
+  const testChain = chains.find(c => c.pid);
+  if (testChain) {
+    const pid = testChain.pid;
+    result.testPid = pid;
+    result.testChain = testChain.id;
+
+    try {
+      result.procStat = fs.readFileSync(`/proc/${pid}/stat`, 'utf8').substring(0, 300);
+      result.procStatOk = true;
+    } catch (e) { result.procStatOk = false; result.procStatErr = e.code || e.message; }
+
+    try {
+      const status = fs.readFileSync(`/proc/${pid}/status`, 'utf8');
+      const threads = status.match(/^Threads:\s+(\d+)/m);
+      const vmRss = status.match(/^VmRSS:\s+(\d+)/m);
+      result.procStatusOk = true;
+      result.threads = threads ? parseInt(threads[1], 10) : null;
+      result.vmRssKB = vmRss ? parseInt(vmRss[1], 10) : null;
+    } catch (e) { result.procStatusOk = false; result.procStatusErr = e.code || e.message; }
+
+    try {
+      result.procIO = fs.readFileSync(`/proc/${pid}/io`, 'utf8').substring(0, 300);
+      result.procIOOk = true;
+    } catch (e) { result.procIOOk = false; result.procIOErr = e.code || e.message; }
+
+    const cpuTime = readProcCpuTime(pid);
+    result.readProcCpuTime = cpuTime;
+    const prevCpu = prevProcCpu[pid];
+    result.prevProcCpu = prevCpu ? { utime: prevCpu.utime, stime: prevCpu.stime, wallMs: prevCpu.wallMs } : null;
+  }
+
+  res.json(result);
+});
+
 // ---------------------------------------------------------------------------
 // Start
 // ---------------------------------------------------------------------------
@@ -768,6 +830,7 @@ if (IS_LINUX) readNetDev();
 if (IS_LINUX) {
   try {
     const psOut = execSync('ps -eo pid,ppid,rss,comm,args --no-headers', { encoding: 'utf8', timeout: 5000 });
+    const matchedPids = [];
     for (const line of psOut.trim().split('\n')) {
       const m = line.trim().match(/^(\d+)\s+(\d+)\s+(\d+)\s+(\S+)\s+(.*)$/);
       if (!m) continue;
@@ -777,16 +840,29 @@ if (IS_LINUX) {
       for (const def of CHAIN_DEFS) {
         if ((def.matchComm && comm === def.matchComm) ||
             (def.matchArgs && args.includes(def.matchArgs) && (comm === 'node' || comm === 'MainThread'))) {
+          matchedPids.push({ pid, chain: def.id, comm });
           const baseline = readProcCpuTime(pid);
-          if (baseline) prevProcCpu[pid] = baseline;
+          if (baseline) {
+            prevProcCpu[pid] = baseline;
+          } else {
+            console.warn(`[init] Could not read /proc/${pid}/stat for ${def.id} (comm=${comm})`);
+          }
           const ioBaseline = readProcIO(pid);
-          if (ioBaseline) prevProcIO[pid] = ioBaseline;
+          if (ioBaseline) {
+            prevProcIO[pid] = ioBaseline;
+          } else {
+            console.warn(`[init] Could not read /proc/${pid}/io for ${def.id} (comm=${comm})`);
+          }
           break;
         }
       }
     }
-    console.log('[init] Primed CPU/IO baselines for', Object.keys(prevProcCpu).length, 'chain processes');
-  } catch {}
+    console.log('[init] Matched chains:', matchedPids.map(p => `${p.chain}(${p.pid}/${p.comm})`).join(', '));
+    console.log('[init] Primed CPU baselines for', Object.keys(prevProcCpu).length, '/', matchedPids.length, 'chain processes');
+    console.log('[init] Primed I/O baselines for', Object.keys(prevProcIO).length, '/', matchedPids.length, 'chain processes');
+  } catch (e) {
+    console.error('[init] Failed to prime baselines:', e.message);
+  }
 }
 
 setTimeout(() => {
