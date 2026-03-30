@@ -9,7 +9,7 @@ const PORT = parseInt(process.env.PORT || '9999', 10);
 const AUTH_TOKEN = process.env.AUTH_TOKEN || '';
 const ELASTOS_NODE_DIR = process.env.ELASTOS_NODE_DIR || '';
 const DATA_DIR = path.join(__dirname, 'data');
-const COLLECT_INTERVAL_MS = 30_000;
+const COLLECT_INTERVAL_MS = 3_000;
 const RETENTION_DAYS = 30;
 const IS_LINUX = os.platform() === 'linux';
 
@@ -605,7 +605,16 @@ function readHistory(rangeMs) {
   ensureDataDir();
   const now = Date.now();
   const since = now - rangeMs;
+  const MAX_POINTS = 400;
+
+  // Estimate how many snapshots exist in this range and pre-compute a skip ratio.
+  // At 3s intervals: 1h=1200, 24h=28800, 7d=201600, 30d=864000 lines.
+  // We only want ~MAX_POINTS, so skip (estimated_total / MAX_POINTS) lines.
+  const estimatedTotal = Math.ceil(rangeMs / COLLECT_INTERVAL_MS);
+  const skipEvery = Math.max(1, Math.floor(estimatedTotal / MAX_POINTS));
+
   const results = [];
+  let lineIndex = 0;
 
   try {
     const files = fs.readdirSync(DATA_DIR).filter(f => f.endsWith('.jsonl')).sort();
@@ -615,32 +624,41 @@ function readHistory(rangeMs) {
       if (fileDate.getTime() < since) continue;
 
       const content = fs.readFileSync(path.join(DATA_DIR, f), 'utf8');
-      const lines = content.trim().split('\n');
+      const lines = content.split('\n');
       for (const line of lines) {
         if (!line) continue;
+        lineIndex++;
+        if (skipEvery > 1 && (lineIndex % skipEvery) !== 0) continue;
         try {
           const snap = JSON.parse(line);
           if (snap.ts >= since) results.push(snap);
-        } catch { /* skip malformed lines */ }
+        } catch { /* skip malformed */ }
       }
     }
   } catch { /* no data yet */ }
 
-  return downsample(results, rangeMs);
-}
+  // Always include the very last data point for accuracy
+  if (results.length > 0) {
+    try {
+      const files = fs.readdirSync(DATA_DIR).filter(f => f.endsWith('.jsonl')).sort();
+      if (files.length > 0) {
+        const lastFile = fs.readFileSync(path.join(DATA_DIR, files[files.length - 1]), 'utf8');
+        const lastLines = lastFile.trimEnd().split('\n');
+        for (let i = lastLines.length - 1; i >= 0; i--) {
+          if (!lastLines[i]) continue;
+          try {
+            const lastSnap = JSON.parse(lastLines[i]);
+            if (lastSnap.ts >= since && results[results.length - 1].ts !== lastSnap.ts) {
+              results.push(lastSnap);
+            }
+          } catch {}
+          break;
+        }
+      }
+    } catch {}
+  }
 
-function downsample(data, rangeMs) {
-  const MAX_POINTS = 300;
-  if (data.length <= MAX_POINTS) return data;
-  const step = Math.ceil(data.length / MAX_POINTS);
-  const out = [];
-  for (let i = 0; i < data.length; i += step) {
-    out.push(data[i]);
-  }
-  if (out[out.length - 1] !== data[data.length - 1]) {
-    out.push(data[data.length - 1]);
-  }
-  return out;
+  return results;
 }
 
 // ---------------------------------------------------------------------------

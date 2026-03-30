@@ -237,7 +237,7 @@
 
   <footer class="border-t border-slate-700 px-6 py-4 mt-8">
     <div class="max-w-7xl mx-auto text-center text-sm text-slate-500">
-      Elastos Node Monitor &middot; Collecting every 30s &middot; Retaining 30 days
+      Elastos Node Monitor &middot; Collecting every 3s &middot; Retaining 30 days
     </div>
   </footer>
 
@@ -717,8 +717,8 @@ async function init() {
   await fetchSpecs();
   await fetchCurrent();
   await fetchHistory();
-  setInterval(fetchCurrent, 30000);
-  setInterval(fetchHistory, 60000);
+  setInterval(fetchCurrent, 3000);
+  setInterval(fetchHistory, 30000);
 }
 
 init();
