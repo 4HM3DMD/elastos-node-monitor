@@ -128,11 +128,12 @@
                 <th class="text-left py-2 px-3">Status</th>
                 <th class="text-right py-2 px-3">CPU %</th>
                 <th class="text-right py-2 px-3">RAM</th>
+                <th class="text-right py-2 px-3">Disk</th>
                 <th class="text-right py-2 px-3">PID</th>
               </tr>
             </thead>
             <tbody id="chainTableBody">
-              <tr><td colspan="5" class="py-4 text-center text-slate-500">Loading...</td></tr>
+              <tr><td colspan="6" class="py-4 text-center text-slate-500">Loading...</td></tr>
             </tbody>
           </table>
         </div>
@@ -428,6 +429,17 @@ async function fetchCurrent() {
   } catch (e) { console.error('Failed to fetch current:', e); }
 }
 
+function fmtRAM(mb) {
+  if (mb >= 1024) return (mb / 1024).toFixed(1) + ' GB';
+  return mb.toFixed(0) + ' MB';
+}
+
+function fmtDisk(gb) {
+  if (!gb || gb === 0) return '—';
+  if (gb >= 1) return gb.toFixed(1) + ' GB';
+  return (gb * 1024).toFixed(0) + ' MB';
+}
+
 function updateChainBreakdown(chains) {
   if (!chains) return;
 
@@ -437,11 +449,16 @@ function updateChainBreakdown(chains) {
   chainChart.data.labels = sorted.map(c => c.name);
   chainChart.data.datasets[0].data = sorted.map(c => c.cpu);
   chainChart.data.datasets[0].backgroundColor = sorted.map(c => CHAIN_COLORS[c.id] || '#64748b');
-  chainChart.data.datasets[1].data = sorted.map(c => c.ramMB);
+  chainChart.data.datasets[1].data = sorted.map(c => c.ramMB >= 1024 ? +(c.ramMB / 1024).toFixed(1) : c.ramMB);
+  chainChart.data.datasets[1].label = 'RAM (GB)';
   chainChart.data.datasets[1].backgroundColor = sorted.map(c => (CHAIN_COLORS[c.id] || '#64748b') + '99');
   chainChart.update('none');
 
   // Table
+  const totalRamMB = sorted.reduce((s, c) => s + c.ramMB, 0);
+  const totalDiskGB = sorted.reduce((s, c) => s + (c.diskGB || 0), 0);
+  const totalCpu = sorted.reduce((s, c) => s + c.cpu, 0);
+
   const tbody = document.getElementById('chainTableBody');
   tbody.innerHTML = sorted.map(c => `
     <tr class="border-b border-slate-800 hover:bg-slate-800/50">
@@ -451,10 +468,19 @@ function updateChainBreakdown(chains) {
         <span class="ml-2 capitalize">${c.status}</span>
       </td>
       <td class="py-2.5 px-3 text-right font-mono">${c.cpu.toFixed(1)}%</td>
-      <td class="py-2.5 px-3 text-right font-mono">${c.ramMB.toFixed(0)} MB</td>
+      <td class="py-2.5 px-3 text-right font-mono">${fmtRAM(c.ramMB)}</td>
+      <td class="py-2.5 px-3 text-right font-mono">${fmtDisk(c.diskGB)}</td>
       <td class="py-2.5 px-3 text-right font-mono text-slate-500">${c.pid || '—'}</td>
     </tr>
-  `).join('');
+  `).join('') + `
+    <tr class="border-t-2 border-slate-600 font-semibold">
+      <td class="py-2.5 px-3 text-slate-300">Total (all chains)</td>
+      <td class="py-2.5 px-3"></td>
+      <td class="py-2.5 px-3 text-right font-mono text-white">${totalCpu.toFixed(1)}%</td>
+      <td class="py-2.5 px-3 text-right font-mono text-white">${fmtRAM(totalRamMB)}</td>
+      <td class="py-2.5 px-3 text-right font-mono text-white">${totalDiskGB > 0 ? totalDiskGB.toFixed(1) + ' GB' : '—'}</td>
+      <td class="py-2.5 px-3"></td>
+    </tr>`;
 }
 
 function updateVerdictBanner(data) {

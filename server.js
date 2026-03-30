@@ -312,12 +312,22 @@ function getElastosProcesses() {
 
       if (isMatch) {
         matched.add(proc.pid);
+        // Read VmRSS from /proc for accuracy (ps rss can underreport for mmap-heavy processes)
+        let ramMB = Math.round(proc.rssKB / 1024 * 10) / 10;
+        try {
+          const status = fs.readFileSync(`/proc/${proc.pid}/status`, 'utf8');
+          const vmRss = status.match(/^VmRSS:\s+(\d+)/m);
+          if (vmRss) {
+            ramMB = Math.round(parseInt(vmRss[1], 10) / 1024 * 10) / 10;
+          }
+        } catch { /* process may have exited */ }
+
         results.push({
           id: def.id,
           name: def.name,
           pid: proc.pid,
           cpu: proc.cpu,
-          ramMB: Math.round(proc.rssKB / 1024 * 10) / 10,
+          ramMB,
           status: 'running',
         });
         found = true;
@@ -329,7 +339,67 @@ function getElastosProcesses() {
       results.push({ id: def.id, name: def.name, pid: null, cpu: 0, ramMB: 0, status: 'stopped' });
     }
   }
+
+  // Per-chain disk usage (from Elastos node directory)
+  if (ELASTOS_NODE_DIR) {
+    const diskCache = getChainDiskUsage();
+    for (const r of results) {
+      r.diskGB = diskCache[r.id] || 0;
+    }
+  }
+
   return results;
+}
+
+// ---------------------------------------------------------------------------
+// Per-chain disk usage (cached, updated once per hour)
+// ---------------------------------------------------------------------------
+
+let chainDiskCache = {};
+let chainDiskLastUpdate = 0;
+const CHAIN_DISK_INTERVAL_MS = 60 * 60 * 1000; // 1 hour
+
+// Maps chain IDs to their directory names under the node directory
+const CHAIN_DIR_NAMES = {
+  'ela': 'ela', 'did': 'did', 'esc': 'esc', 'esc-oracle': 'esc-oracle',
+  'eid': 'eid', 'eid-oracle': 'eid-oracle', 'eco': 'eco', 'eco-oracle': 'eco-oracle',
+  'pg': 'pg', 'pg-oracle': 'pg-oracle', 'arbiter': 'arbiter', 'carrier': 'carrier',
+};
+
+function getChainDiskUsage() {
+  const now = Date.now();
+  if (now - chainDiskLastUpdate < CHAIN_DISK_INTERVAL_MS && Object.keys(chainDiskCache).length > 0) {
+    return chainDiskCache;
+  }
+
+  const result = {};
+  try {
+    const duOut = execSync(`du -sk ${ELASTOS_NODE_DIR}/*/ 2>/dev/null || true`, {
+      encoding: 'utf8',
+      timeout: 60000,
+    });
+    for (const line of duOut.trim().split('\n')) {
+      if (!line) continue;
+      const parts = line.split('\t');
+      if (parts.length < 2) continue;
+      const sizeKB = parseInt(parts[0], 10) || 0;
+      const dirPath = parts[1].replace(/\/+$/, '');
+      const dirName = path.basename(dirPath);
+
+      for (const [chainId, chainDir] of Object.entries(CHAIN_DIR_NAMES)) {
+        if (dirName === chainDir) {
+          result[chainId] = Math.round(sizeKB / (1024 * 1024) * 100) / 100; // GB
+          break;
+        }
+      }
+    }
+    chainDiskCache = result;
+    chainDiskLastUpdate = now;
+    console.log('[disk] Updated per-chain disk usage:', result);
+  } catch (e) {
+    console.error('[disk] Failed to read chain disk usage:', e.message);
+  }
+  return result;
 }
 
 // ---------------------------------------------------------------------------
