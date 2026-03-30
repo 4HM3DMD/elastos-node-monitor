@@ -244,77 +244,90 @@ function getNetwork() {
 // ---------------------------------------------------------------------------
 
 const CHAIN_DEFS = [
-  { id: 'ela',        name: 'ELA Mainchain',   bins: ['ela'] },
-  { id: 'did',        name: 'DID Sidechain',   bins: ['did'] },
-  { id: 'esc',        name: 'ESC Sidechain',   bins: ['esc', 'geth'] },
-  { id: 'esc-oracle', name: 'ESC Oracle',       bins: ['esc_oracle'] },
-  { id: 'eid',        name: 'EID Sidechain',   bins: ['eid', 'geth'] },
-  { id: 'eid-oracle', name: 'EID Oracle',       bins: ['eid_oracle'] },
-  { id: 'arbiter',    name: 'Arbiter',          bins: ['arbiter'] },
-  { id: 'carrier',    name: 'Carrier Bootstrap', bins: ['carrier'] },
+  { id: 'ela',        name: 'ELA Mainchain',     bins: ['ela'],        pgrep: 'ela' },
+  { id: 'did',        name: 'DID Sidechain',     bins: ['did'],        pgrep: 'did' },
+  { id: 'esc',        name: 'ESC Sidechain',     bins: ['esc'],        pgrep: '\\./esc .*--rpc' },
+  { id: 'esc-oracle', name: 'ESC Oracle',         bins: [],             pgrep: 'crosschain_esc' },
+  { id: 'eid',        name: 'EID Sidechain',     bins: ['eid'],        pgrep: '\\./eid .*--rpc' },
+  { id: 'eid-oracle', name: 'EID Oracle',         bins: [],             pgrep: 'crosschain_eid' },
+  { id: 'eco',        name: 'ECO Sidechain',     bins: ['eco'],        pgrep: '\\./eco .*--rpc' },
+  { id: 'eco-oracle', name: 'ECO Oracle',         bins: [],             pgrep: 'crosschain_eco' },
+  { id: 'pg',         name: 'PG Sidechain',      bins: ['pg'],         pgrep: '\\./pg .*--rpc' },
+  { id: 'pg-oracle',  name: 'PG Oracle',          bins: [],             pgrep: 'crosschain_pg' },
+  { id: 'arbiter',    name: 'Arbiter',            bins: ['arbiter'],    pgrep: 'arbiter' },
+  { id: 'carrier',    name: 'Carrier Bootstrap',  bins: ['carrier'],    pgrep: 'carrier' },
 ];
 
 function getElastosProcesses() {
   const results = [];
+
+  let psLines = [];
   try {
-    const psOut = execSync('ps -eo pid,pcpu,rss,vsz,comm,args --no-headers 2>/dev/null || ps aux 2>/dev/null', {
+    const psOut = execSync('ps -eo pid,pcpu,rss,vsz,comm,args --no-headers', {
       encoding: 'utf8',
       timeout: 5000,
     });
-
-    const lines = psOut.trim().split('\n');
-    const matched = new Set();
-
+    psLines = psOut.trim().split('\n');
+  } catch {
     for (const def of CHAIN_DEFS) {
-      let found = false;
-      for (const line of lines) {
+      results.push({ id: def.id, name: def.name, pid: null, cpu: 0, ramMB: 0, status: 'unknown' });
+    }
+    return results;
+  }
+
+  const matched = new Set();
+
+  for (const def of CHAIN_DEFS) {
+    let found = false;
+
+    // Method 1: use pgrep pattern (matches how node.sh finds its own processes)
+    if (def.pgrep) {
+      try {
+        const pgrepOut = execSync(`pgrep -f '${def.pgrep}' 2>/dev/null`, { encoding: 'utf8', timeout: 3000 });
+        const pids = pgrepOut.trim().split('\n').map(p => parseInt(p, 10)).filter(p => p > 0 && !matched.has(p));
+        if (pids.length > 0) {
+          const targetPid = pids[0];
+          matched.add(targetPid);
+          const psLine = psLines.find(l => {
+            const p = parseInt(l.trim().split(/\s+/)[0], 10);
+            return p === targetPid;
+          });
+          let cpu = 0, ramMB = 0;
+          if (psLine) {
+            const parts = psLine.trim().split(/\s+/);
+            cpu = parseFloat(parts[1]) || 0;
+            ramMB = Math.round((parseInt(parts[2], 10) || 0) / 1024 * 10) / 10;
+          }
+          results.push({ id: def.id, name: def.name, pid: targetPid, cpu, ramMB, status: 'running' });
+          found = true;
+        }
+      } catch { /* pgrep returns exit 1 when no match */ }
+    }
+
+    // Method 2: fallback to binary name match from ps output
+    if (!found && def.bins.length > 0) {
+      for (const line of psLines) {
         const parts = line.trim().split(/\s+/);
         if (parts.length < 5) continue;
-
         const pid = parseInt(parts[0], 10);
-        const cpu = parseFloat(parts[1]);
-        const rssKB = parseInt(parts[2], 10);
-        const comm = parts[4].toLowerCase();
-        const args = parts.slice(5).join(' ').toLowerCase();
-
         if (matched.has(pid)) continue;
-
-        let isMatch = false;
-
-        if (def.id === 'esc-oracle') {
-          isMatch = args.includes('oracle') && (args.includes('esc') || args.includes('ethsc'));
-        } else if (def.id === 'eid-oracle') {
-          isMatch = args.includes('oracle') && (args.includes('eid') || args.includes('ethei'));
-        } else if (def.id === 'esc') {
-          isMatch = (comm === 'geth' || comm === 'esc') && !args.includes('oracle') && (args.includes('esc') || args.includes('ethsc') || args.includes('20636'));
-        } else if (def.id === 'eid') {
-          isMatch = (comm === 'geth' || comm === 'eid') && !args.includes('oracle') && (args.includes('eid') || args.includes('ethei') || args.includes('20646'));
-        } else {
-          isMatch = def.bins.some(b => comm === b || comm.endsWith('/' + b));
-        }
-
-        if (isMatch) {
+        const comm = parts[4].toLowerCase();
+        if (def.bins.some(b => comm === b || comm.endsWith('/' + b))) {
           matched.add(pid);
           results.push({
-            id: def.id,
-            name: def.name,
-            pid,
-            cpu,
-            ramMB: Math.round(rssKB / 1024 * 10) / 10,
+            id: def.id, name: def.name, pid,
+            cpu: parseFloat(parts[1]) || 0,
+            ramMB: Math.round((parseInt(parts[2], 10) || 0) / 1024 * 10) / 10,
             status: 'running',
           });
           found = true;
           break;
         }
       }
-
-      if (!found) {
-        results.push({ id: def.id, name: def.name, pid: null, cpu: 0, ramMB: 0, status: 'stopped' });
-      }
     }
-  } catch {
-    for (const def of CHAIN_DEFS) {
-      results.push({ id: def.id, name: def.name, pid: null, cpu: 0, ramMB: 0, status: 'unknown' });
+
+    if (!found) {
+      results.push({ id: def.id, name: def.name, pid: null, cpu: 0, ramMB: 0, status: 'stopped' });
     }
   }
   return results;
