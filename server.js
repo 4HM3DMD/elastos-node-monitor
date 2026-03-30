@@ -774,61 +774,40 @@ app.get('/api/specs', (req, res) => {
 });
 
 app.get('/api/diag', (req, res) => {
-  const result = { platform: os.platform(), isLinux: IS_LINUX, clkTck: CLK_TCK, specs: SPECS };
-  result.primedCpuPids = Object.keys(prevProcCpu).map(Number);
-  result.primedIOPids = Object.keys(prevProcIO).map(Number);
+  const result = {
+    platform: os.platform(),
+    isLinux: IS_LINUX,
+    clkTck: CLK_TCK,
+    specs: SPECS,
+    primedCpuCount: Object.keys(prevProcCpu).length,
+    primedIOCount: Object.keys(prevProcIO).length,
+    snapshotAge: latestSnapshot ? Date.now() - latestSnapshot.ts : null,
+  };
 
   const chains = latestSnapshot ? latestSnapshot.chains : [];
+  result.chains = chains.map(c => ({
+    id: c.id,
+    pid: c.pid,
+    status: c.status,
+    cpu: c.cpu,
+    cpuRaw: c.cpuRaw,
+    ramMB: c.ramMB,
+    threads: c.threads,
+    uptimeSec: c.uptimeSec,
+    hasCpuBaseline: c.pid ? !!prevProcCpu[c.pid] : false,
+    hasIOBaseline: c.pid ? !!prevProcIO[c.pid] : false,
+  }));
+
   const testChain = chains.find(c => c.pid);
   if (testChain) {
     const pid = testChain.pid;
-    result.testPid = pid;
-    result.testChain = testChain.id;
-
-    try {
-      result.procStat = fs.readFileSync(`/proc/${pid}/stat`, 'utf8').substring(0, 300);
-      result.procStatOk = true;
-    } catch (e) { result.procStatOk = false; result.procStatErr = e.code || e.message; }
-
-    try {
-      const status = fs.readFileSync(`/proc/${pid}/status`, 'utf8');
-      const threads = status.match(/^Threads:\s+(\d+)/m);
-      const vmRss = status.match(/^VmRSS:\s+(\d+)/m);
-      result.procStatusOk = true;
-      result.threads = threads ? parseInt(threads[1], 10) : null;
-      result.vmRssKB = vmRss ? parseInt(vmRss[1], 10) : null;
-    } catch (e) { result.procStatusOk = false; result.procStatusErr = e.code || e.message; }
-
-    try {
-      result.procIO = fs.readFileSync(`/proc/${pid}/io`, 'utf8').substring(0, 300);
-      result.procIOOk = true;
-    } catch (e) { result.procIOOk = false; result.procIOErr = e.code || e.message; }
-
-    const cpuTime = readProcCpuTime(pid);
-    result.readProcCpuTime = cpuTime;
-    const prevCpu = prevProcCpu[pid];
-    result.prevProcCpu = prevCpu ? { utime: prevCpu.utime, stime: prevCpu.stime, wallMs: prevCpu.wallMs } : null;
-
-    // Step-by-step test of fixed parsing
-    const debug = {};
-    try {
-      const rawStat = fs.readFileSync(`/proc/${pid}/stat`, 'utf8');
-      debug.rawLen = rawStat.length;
-      debug.hasCloseParen = rawStat.includes(')');
-      const parenIdx = rawStat.lastIndexOf(')');
-      debug.parenIdx = parenIdx;
-      if (parenIdx >= 0) {
-        const after = rawStat.substring(parenIdx + 2).trim();
-        const fields = after.split(/\s+/);
-        debug.fieldCount = fields.length;
-        debug.field0_state = fields[0];
-        debug.utime = parseInt(fields[11], 10);
-        debug.stime = parseInt(fields[12], 10);
-        debug.starttime = parseInt(fields[19], 10);
-      }
-      debug.readProcCpuTimeResult = readProcCpuTime(pid);
-    } catch (e) { debug.error = e.message; }
-    result.cpuDebug = debug;
+    result.procReadTest = {};
+    try { fs.readFileSync(`/proc/${pid}/stat`, 'utf8'); result.procReadTest.stat = true; }
+    catch (e) { result.procReadTest.stat = false; result.procReadTest.statErr = e.code; }
+    try { fs.readFileSync(`/proc/${pid}/status`, 'utf8'); result.procReadTest.status = true; }
+    catch (e) { result.procReadTest.status = false; result.procReadTest.statusErr = e.code; }
+    try { fs.readFileSync(`/proc/${pid}/io`, 'utf8'); result.procReadTest.io = true; }
+    catch (e) { result.procReadTest.io = false; result.procReadTest.ioErr = e.code; }
   }
 
   res.json(result);
