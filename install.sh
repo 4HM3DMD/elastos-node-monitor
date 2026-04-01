@@ -65,7 +65,11 @@ elif [ "$NODE_OK" = false ]; then
     if ! command -v curl &>/dev/null; then
         $SUDO apt-get update -y && $SUDO apt-get install -y curl
     fi
-    curl -fsSL https://deb.nodesource.com/setup_20.x | $SUDO -E bash -
+    if [ -n "$SUDO" ]; then
+        curl -fsSL https://deb.nodesource.com/setup_20.x | $SUDO -E bash -
+    else
+        curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+    fi
     $SUDO apt-get install -y nodejs
     log "Node.js $(node -v) + npm $(npm -v) installed"
 fi
